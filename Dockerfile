@@ -2,10 +2,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --include=dev
 
 COPY prisma ./prisma
 COPY tsconfig.json ./tsconfig.json
@@ -15,6 +13,7 @@ COPY eslint.config.mjs ./eslint.config.mjs
 COPY src ./src
 COPY public ./public
 
+ENV NODE_ENV=production
 RUN npx prisma generate
 RUN npm run build
 
