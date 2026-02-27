@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN}
+      NODE_ENV: production
+      NEXT_PUBLIC_BASE_PATH: /pms
+      UPLOAD_ROOT: /data/uploads
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - /srv/grsd-pms/uploads:/data/uploads
+
+volumes:
+  db_data:
+

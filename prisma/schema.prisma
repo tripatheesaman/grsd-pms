@@ -1,0 +1,287 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+  SUPERADMIN
+}
+
+enum TriggerType {
+  HOURS
+  CALENDAR
+}
+
+enum UsageUnit {
+  HOURS
+  KM
+}
+
+enum IntervalTimeUnit {
+  MONTHS
+  YEARS
+}
+
+enum CheckStatus {
+  PREDICTED
+  ISSUE_REQUIRED
+  NEAR_DUE
+  ISSUED
+  COMPLETED
+  OVERDUE
+}
+
+enum AlertLevel {
+  APPROACHING
+  ISSUE_REQUIRED
+  NEAR_DUE
+  OVERDUE
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+model User {
+  id              String           @id @default(cuid())
+  email           String           @unique
+  fullName        String
+  passwordHash    String
+  role            Role             @default(USER)
+  isActive        Boolean          @default(true)
+  permissions     UserPermission[]
+  sessions        Session[]
+  createdEntries  DailyEntry[]     @relation("EntryCreatedBy")
+  approvedEntries DailyEntry[]     @relation("EntryApprovedBy")
+  rejectedEntries DailyEntry[]     @relation("EntryRejectedBy")
+  notifications   Notification[]
+  updatedConfigs  SystemConfig[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  name        String
+  description String?
+  users       UserPermission[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+}
+
+model UserPermission {
+  id           String     @id @default(cuid())
+  userId       String
+  permissionId String
+  allowed      Boolean    @default(true)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([userId, permissionId])
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  userId     String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastSeenAt DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model Equipment {
+  id                 String         @id @default(cuid())
+  equipmentNumber    String         @unique
+  displayName        String
+  equipmentClass     String         @default("GENERAL")
+  averageHoursPerDay Decimal        @default(0) @db.Decimal(10, 2)
+  currentHours       Decimal        @default(0) @db.Decimal(12, 2)
+  commissionedAt     DateTime?
+  isActive           Boolean        @default(true)
+  usageUnit          UsageUnit      @default(HOURS)
+  checkRules         CheckRule[]
+  entries            DailyEntry[]
+  checkSheets        CheckSheet[]
+  alerts             Alert[]
+  notifications      Notification[]
+  groundingPeriods   GroundingPeriod[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+}
+
+model GroundingPeriod {
+  id          String    @id @default(cuid())
+  equipmentId String
+  fromDate    DateTime
+  toDate      DateTime?
+  reason      String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([equipmentId, fromDate])
+}
+
+model CheckRule {
+  id                     String           @id @default(cuid())
+  equipmentId            String
+  code                   String
+  intervalHours          Int
+  intervalTimeValue      Int?
+  intervalTimeUnit       IntervalTimeUnit?
+  approachingOffsetHours Int              @default(120)
+  issueOffsetHours       Int              @default(40)
+  nearOffsetHours        Int              @default(10)
+  isActive               Boolean          @default(true)
+  equipment              Equipment        @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  checkSheets            CheckSheet[]
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+
+  @@unique([equipmentId, code])
+}
+
+enum EntryStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model DailyEntry {
+  id           String      @id @default(cuid())
+  equipmentId  String
+  entryDate    DateTime
+  hoursRun     Decimal     @db.Decimal(10, 2)
+  status       EntryStatus @default(PENDING)
+  createdById  String
+  approvedById String?
+  approvedAt   DateTime?
+  rejectedById String?
+  rejectedAt   DateTime?
+  equipment    Equipment   @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  createdBy    User        @relation("EntryCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  approvedBy   User?       @relation("EntryApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  rejectedBy   User?       @relation("EntryRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([equipmentId, entryDate, status])
+  @@index([status])
+  @@index([equipmentId, status])
+}
+
+model CheckSheet {
+  id             String      @id @default(cuid())
+  equipmentId    String
+  checkRuleId    String?
+  checkCode      String
+  dueHours       Decimal     @db.Decimal(12, 2)
+  dueDate        DateTime
+  triggerType    TriggerType
+  status         CheckStatus @default(PREDICTED)
+  issuedAt       DateTime?
+  completedAt    DateTime?
+  pdfFilePath    String?
+  completedHours Decimal?    @db.Decimal(12, 2)
+  equipment      Equipment   @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  checkRule      CheckRule?  @relation(fields: [checkRuleId], references: [id], onDelete: SetNull)
+  alerts         Alert[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([equipmentId, checkCode, dueHours])
+}
+
+model Alert {
+  id             String         @id @default(cuid())
+  equipmentId    String
+  checkSheetId   String?
+  level          AlertLevel
+  message        String
+  acknowledged   Boolean        @default(false)
+  acknowledgedAt DateTime?
+  equipment      Equipment      @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  checkSheet     CheckSheet?    @relation(fields: [checkSheetId], references: [id], onDelete: SetNull)
+  notifications  Notification[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model Notification {
+  id            String              @id @default(cuid())
+  userId        String?
+  alertId       String?
+  equipmentId   String?
+  channel       NotificationChannel
+  status        NotificationStatus  @default(PENDING)
+  title         String
+  message       String
+  targetAddress String?
+  dedupeKey     String?             @unique
+  metadata      Json?
+  scheduledAt   DateTime?
+  sentAt        DateTime?
+  readAt        DateTime?
+  user          User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  alert         Alert?              @relation(fields: [alertId], references: [id], onDelete: SetNull)
+  equipment     Equipment?          @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+}
+
+model EscalationPolicy {
+  id             String   @id @default(cuid())
+  isActive       Boolean  @default(true)
+  level1Days     Int      @default(1)
+  level2Days     Int      @default(3)
+  level3Days     Int      @default(7)
+  level1Channels String   @default("IN_APP")
+  level2Channels String   @default("IN_APP,EMAIL")
+  level3Channels String   @default("IN_APP,EMAIL,SMS")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model SystemConfig {
+  id              String   @id @default(cuid())
+  key             String   @unique
+  value           String
+  description     String?
+  updatedByUserId String?
+  updatedBy       User?    @relation(fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  payload    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+}
