@@ -1,4 +1,12 @@
-export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/pms";
+function normalizeBasePath(value: string | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "/pms";
+  const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const withoutTrailing = withLeading !== "/" ? withLeading.replace(/\/+$/, "") : "/";
+  return withoutTrailing;
+}
+
+export const BASE_PATH = normalizeBasePath(process.env.NEXT_PUBLIC_BASE_PATH);
 
 function normalizePath(path: string): string {
   if (!path.startsWith("/")) {

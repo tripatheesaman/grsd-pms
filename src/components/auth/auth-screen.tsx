@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import toast from "react-hot-toast";
 import { useLogin } from "@/hooks/use-auth";
+import { BASE_PATH } from "@/lib/config/app-config";
 
 export function AuthScreen() {
   const login = useLogin();
@@ -34,7 +35,7 @@ export function AuthScreen() {
         <div className="mb-10 flex flex-col items-center text-center">
           <div className="mb-6 flex items-center justify-center rounded-2xl bg-white p-6 shadow-2xl shadow-[var(--color-primary)]/30 border-2 border-[var(--color-primary)]/30">
             <img 
-              src="/logo.png" 
+              src={`${BASE_PATH}/logo.png`} 
               alt="GrSD Logo" 
               width={120} 
               height={120} 

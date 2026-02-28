@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { Toaster } from "react-hot-toast";
+import { BASE_PATH } from "@/lib/config/app-config";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,9 +19,9 @@ export const metadata: Metadata = {
   title: "GrSD Planning System",
   description: "Planning System for GrSD operations and workflows",
   icons: {
-    icon: "/nac_icon.png",
-    shortcut: "/nac_icon.png",
-    apple: "/nac_icon.png",
+    icon: `${BASE_PATH}/nac_icon.png`,
+    shortcut: `${BASE_PATH}/nac_icon.png`,
+    apple: `${BASE_PATH}/nac_icon.png`,
   },
 };
 

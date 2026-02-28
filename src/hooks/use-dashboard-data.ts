@@ -423,8 +423,9 @@ export function useDeleteEntry() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (entryId: string) => {
-      const response = await fetch(`/api/entries/${entryId}`, {
+      const response = await fetch(apiPath(`/api/entries/${entryId}`), {
         method: "DELETE",
+        credentials: "include",
       });
       if (!response.ok) {
         const error = await response.json();
