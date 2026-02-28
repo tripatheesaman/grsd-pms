@@ -67,8 +67,8 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/grsd-pms:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/grsd-pms:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/grsd-pms:sha-${{ github.sha }}
           build-args: |
             NEXT_PUBLIC_BASE_PATH=${{ vars.NEXT_PUBLIC_BASE_PATH }}
           cache-from: type=gha
