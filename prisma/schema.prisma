@@ -73,6 +73,8 @@ model User {
   updatedConfigs  SystemConfig[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+
+  @@map("user")
 }
 
 model Permission {
@@ -98,6 +100,7 @@ model UserPermission {
   updatedAt    DateTime   @updatedAt
 
   @@unique([userId, permissionId])
+  @@map("user_permission")
 }
 
 model Session {
@@ -110,6 +113,8 @@ model Session {
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+
+  @@map("session")
 }
 
 model Equipment {
@@ -130,6 +135,8 @@ model Equipment {
   groundingPeriods   GroundingPeriod[]
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
+
+  @@map("equipment")
 }
 
 model GroundingPeriod {
@@ -143,6 +150,7 @@ model GroundingPeriod {
   updatedAt   DateTime  @updatedAt
 
   @@index([equipmentId, fromDate])
+  @@map("grounding_period")
 }
 
 model CheckRule {
@@ -162,6 +170,7 @@ model CheckRule {
   updatedAt              DateTime         @updatedAt
 
   @@unique([equipmentId, code])
+  @@map("check_rule")
 }
 
 enum EntryStatus {
@@ -191,6 +200,7 @@ model DailyEntry {
   @@unique([equipmentId, entryDate, status])
   @@index([status])
   @@index([equipmentId, status])
+  @@map("daily_entry")
 }
 
 model CheckSheet {
@@ -213,6 +223,7 @@ model CheckSheet {
   updatedAt      DateTime    @updatedAt
 
   @@unique([equipmentId, checkCode, dueHours])
+  @@map("check_sheet")
 }
 
 model Alert {
@@ -228,6 +239,8 @@ model Alert {
   notifications  Notification[]
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+
+  @@map("alert")
 }
 
 model Notification {
@@ -250,6 +263,8 @@ model Notification {
   equipment     Equipment?          @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
+
+  @@map("notification")
 }
 
 model EscalationPolicy {
@@ -263,6 +278,8 @@ model EscalationPolicy {
   level3Channels String   @default("IN_APP,EMAIL,SMS")
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+
+  @@map("escalation_policy")
 }
 
 model SystemConfig {
@@ -274,6 +291,8 @@ model SystemConfig {
   updatedBy       User?    @relation(fields: [updatedByUserId], references: [id], onDelete: SetNull)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@map("system_config")
 }
 
 model AuditLog {
@@ -286,4 +305,6 @@ model AuditLog {
   ipAddress  String?
   userAgent  String?
   createdAt  DateTime @default(now())
+
+  @@map("audit_log")
 }
