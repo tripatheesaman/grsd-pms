@@ -100,7 +100,7 @@ model UserPermission {
   updatedAt    DateTime   @updatedAt
 
   @@unique([userId, permissionId])
-  @@map("user_permission")
+  @@map("userpermission")
 }
 
 model Session {
@@ -150,7 +150,7 @@ model GroundingPeriod {
   updatedAt   DateTime  @updatedAt
 
   @@index([equipmentId, fromDate])
-  @@map("grounding_period")
+  @@map("groundingperiod")
 }
 
 model CheckRule {
@@ -170,7 +170,7 @@ model CheckRule {
   updatedAt              DateTime         @updatedAt
 
   @@unique([equipmentId, code])
-  @@map("check_rule")
+  @@map("checkrule")
 }
 
 enum EntryStatus {
@@ -200,7 +200,7 @@ model DailyEntry {
   @@unique([equipmentId, entryDate, status])
   @@index([status])
   @@index([equipmentId, status])
-  @@map("daily_entry")
+  @@map("dailyentry")
 }
 
 model CheckSheet {
@@ -223,7 +223,7 @@ model CheckSheet {
   updatedAt      DateTime    @updatedAt
 
   @@unique([equipmentId, checkCode, dueHours])
-  @@map("check_sheet")
+  @@map("checksheet")
 }
 
 model Alert {
@@ -279,7 +279,7 @@ model EscalationPolicy {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  @@map("escalation_policy")
+  @@map("escalationpolicy")
 }
 
 model SystemConfig {
@@ -292,7 +292,7 @@ model SystemConfig {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  @@map("system_config")
+  @@map("systemconfig")
 }
 
 model AuditLog {
@@ -306,5 +306,5 @@ model AuditLog {
   userAgent  String?
   createdAt  DateTime @default(now())
 
-  @@map("audit_log")
+  @@map("auditlog")
 }

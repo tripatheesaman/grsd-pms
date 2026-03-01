@@ -41,5 +41,5 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            tripatheesaman/pms:${{ env.VERSION }}
-            tripatheesaman/pms:latest
+            tripatheesaman/grsd-pms:${{ env.VERSION }}
+            tripatheesaman/grsd-pms:latest
