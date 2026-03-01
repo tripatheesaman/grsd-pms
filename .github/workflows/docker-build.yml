@@ -41,5 +41,5 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            tripatheesaman/mgsem:${{ env.VERSION }}
-            tripatheesaman/mgsem:latest
+            tripatheesaman/pms:${{ env.VERSION }}
+            tripatheesaman/pms:latest
