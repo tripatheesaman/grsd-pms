@@ -78,9 +78,9 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     : Number(equipment.currentHours);
 
   const [approachingConfig, issueConfig, nearConfig] = await Promise.all([
-    (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_hours" } }).catch(() => null),
-    (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_hours" } }).catch(() => null),
-    (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }).catch(() => null),
+    prisma.systemConfig.findUnique({ where: { key: "approaching_offset_hours" } }).catch(() => null),
+    prisma.systemConfig.findUnique({ where: { key: "issue_offset_hours" } }).catch(() => null),
+    prisma.systemConfig.findUnique({ where: { key: "near_offset_hours" } }).catch(() => null),
   ]);
 
   const thresholds = {
