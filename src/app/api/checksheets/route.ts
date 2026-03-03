@@ -134,7 +134,7 @@ export async function GET() {
 
         const activeGrounding = sheet.equipment.groundingPeriods[0] ?? null;
 
-        if (activeGrounding && status !== CheckStatus.ISSUED && status !== CheckStatus.COMPLETED) {
+        if (activeGrounding && recalculatedStatus !== CheckStatus.ISSUED && recalculatedStatus !== CheckStatus.COMPLETED) {
           const fiveMonthsDate = addMonths(activeGrounding.fromDate, 5);
           if (now < fiveMonthsDate) {
             return null;
