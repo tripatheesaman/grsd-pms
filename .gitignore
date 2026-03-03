@@ -32,3 +32,6 @@ config/.env.production
 
 # Misc
 tsconfig.tsbuildinfo
+
+# Development uploads
+uploads-dev/

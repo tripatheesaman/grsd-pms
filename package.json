@@ -10,7 +10,15 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "docker:dev:up": "docker-compose -f docker-compose.dev.yml --env-file .env.dev up",
+    "docker:dev:down": "docker-compose -f docker-compose.dev.yml down",
+    "docker:dev:logs": "docker-compose -f docker-compose.dev.yml logs -f app-dev",
+    "docker:dev:migrate": "docker-compose -f docker-compose.dev.yml exec app-dev npm run db:migrate",
+    "docker:dev:studio": "docker-compose -f docker-compose.dev.yml exec app-dev npx prisma studio",
+    "docker:prod:up": "docker-compose up -d",
+    "docker:prod:down": "docker-compose down",
+    "docker:prod:logs": "docker-compose logs -f app"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",

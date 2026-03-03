@@ -1,0 +1,52 @@
+services:
+  db-dev:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD_DEV:-devrootpass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE_DEV:-grsd_pms_dev}
+      MYSQL_USER: ${MYSQL_USER_DEV:-devuser}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD_DEV:-devpass}
+    ports:
+      - "${MYSQL_PORT_DEV:-3307}:3306"
+    volumes:
+      - db_dev_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    depends_on:
+      db-dev:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DEV:-mysql://devuser:devpass@db-dev:3306/grsd_pms_dev}
+      BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN_DEV:-dev-bootstrap-token}
+      NODE_ENV: development
+      NEXT_PUBLIC_BASE_PATH: /pms
+      UPLOAD_ROOT: /data/uploads
+    ports:
+      - "${PORT_DEV:-3001}:3000"
+    volumes:
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+      - ./public:/app/public
+      - ./package.json:/app/package.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./next.config.ts:/app/next.config.ts
+      - ./postcss.config.mjs:/app/postcss.config.mjs
+      - ./eslint.config.mjs:/app/eslint.config.mjs
+      - node_modules_dev:/app/node_modules
+      - ./uploads-dev:/data/uploads
+      - ./.next:/app/.next
+    command: npm run dev
+
+volumes:
+  db_dev_data:
+  node_modules_dev:

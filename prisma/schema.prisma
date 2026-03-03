@@ -114,6 +114,8 @@ model Session {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  @@index([userId, expiresAt])
+  @@index([tokenHash])
   @@map("session")
 }
 
@@ -200,6 +202,8 @@ model DailyEntry {
   @@unique([equipmentId, entryDate, status])
   @@index([status])
   @@index([equipmentId, status])
+  @@index([equipmentId, entryDate])
+  @@index([entryDate])
   @@map("dailyentry")
 }
 
@@ -223,6 +227,10 @@ model CheckSheet {
   updatedAt      DateTime    @updatedAt
 
   @@unique([equipmentId, checkCode, dueHours])
+  @@index([equipmentId, dueDate])
+  @@index([equipmentId, status])
+  @@index([status, dueDate])
+  @@index([dueDate])
   @@map("checksheet")
 }
 
@@ -240,6 +248,8 @@ model Alert {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
+  @@index([equipmentId, acknowledged])
+  @@index([acknowledged])
   @@map("alert")
 }
 
@@ -264,6 +274,9 @@ model Notification {
   createdAt     DateTime            @default(now())
   updatedAt     DateTime            @updatedAt
 
+  @@index([userId, status])
+  @@index([userId])
+  @@index([status])
   @@map("notification")
 }
 

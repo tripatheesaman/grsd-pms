@@ -50,32 +50,27 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   const valueDate = new Date(parsed.data.date);
-  if (parsed.data.action === "issue") {
-    await prisma.checkSheet.update({
-      where: {
-        id: checkSheetId,
-      },
-      data: {
-        issuedAt: valueDate,
-        status: CheckStatus.ISSUED,
-      },
-    });
-  } else {
-    await prisma.checkSheet.update({
-      where: {
-        id: checkSheetId,
-      },
-      data: {
-        completedAt: valueDate,
-        completedHours: parsed.data.completedHours !== undefined ? parsed.data.completedHours : null,
-        status: CheckStatus.COMPLETED,
-      },
-    });
-  }
+  
+  await prisma.checkSheet.update({
+    where: {
+      id: checkSheetId,
+    },
+    data:
+      parsed.data.action === "issue"
+        ? {
+            issuedAt: valueDate,
+            status: CheckStatus.ISSUED,
+          }
+        : {
+            completedAt: valueDate,
+            completedHours: parsed.data.completedHours !== undefined ? parsed.data.completedHours : null,
+            status: CheckStatus.COMPLETED,
+          },
+  });
 
-  await syncEquipmentPlan(existing.equipmentId, new Date().getFullYear());
+  syncEquipmentPlan(existing.equipmentId, new Date().getFullYear()).catch(() => null);
 
-  await writeAuditLog({
+  writeAuditLog({
     userId: access.user.id,
     action: `checksheet.${parsed.data.action}`,
     entityType: "CheckSheet",
@@ -83,10 +78,10 @@ export async function PATCH(request: Request, context: RouteContext) {
     payload: {
       action: parsed.data.action,
       date: valueDate.toISOString(),
-        completedHours: parsed.data.completedHours ?? null,
+      completedHours: parsed.data.completedHours ?? null,
     },
     request,
-  });
+  }).catch(() => null);
 
   return ok({ id: checkSheetId, status: parsed.data.action === "issue" ? "ISSUED" : "COMPLETED" });
 }

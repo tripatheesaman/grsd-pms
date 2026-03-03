@@ -55,6 +55,14 @@ export async function GET(request: Request, context: RouteContext) {
         lte: new Date(year, 11, 31, 23, 59, 59, 999),
       },
     },
+    select: {
+      id: true,
+      checkCode: true,
+      triggerType: true,
+      dueDate: true,
+      dueHours: true,
+      status: true,
+    },
     orderBy: {
       dueDate: "asc",
     },
