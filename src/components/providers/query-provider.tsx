@@ -8,10 +8,6 @@ type QueryProviderProps = {
 };
 
 export function QueryProvider({ children }: QueryProviderProps) {
-  if (typeof window === 'undefined') {
-    return <>{children}</>;
-  }
-
   const [queryClient] = useState(
     () =>
       new QueryClient({
