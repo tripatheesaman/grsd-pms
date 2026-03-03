@@ -834,7 +834,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [equipmentError, setEquipmentError] = useState<string | undefined>(undefined);
   const [hoursError, setHoursError] = useState<string | undefined>(undefined);
   const [bulkMode, setBulkMode] = useState(false);
-  const [bulkEntries, setBulkEntries] = useState<Array<{ equipmentId: string; hours: string; search: string; searchOpen: boolean; searchIndex: number; error?: string }>>([]);
+  const [bulkEntries, setBulkEntries] = useState<Array<{ equipmentId: string; hours: string; previous: number; error?: string }>>([]);
   const equipmentSearchRef = useRef<HTMLDivElement>(null);
 
   const yearOptions = useMemo(() => {
@@ -1210,6 +1210,13 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const plan = useEquipmentPlan(selectedEquipmentId, year);
   const forecastMetrics = useForecastMetrics(selectedEquipmentId);
   const equipmentOptions = equipments.data ?? [];
+  const bulkEquipmentList = useMemo(
+    () =>
+      [...equipmentOptions].sort((a, b) =>
+        a.equipmentNumber.localeCompare(b.equipmentNumber),
+      ),
+    [equipmentOptions],
+  );
   const stats = analytics.data;
   const allChecks = checksheets.data ?? [];
   const allAlerts = alerts.data ?? [];
@@ -1494,9 +1501,15 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const onBulkSubmit = async () => {
     if (bulkEntries.length === 0) return;
     const date = new Date(`${entryDate}T00:00:00.000Z`).toISOString();
-    const validEntries = bulkEntries.filter((e) => e.equipmentId && e.hours);
+    const validEntries = bulkEntries.filter((e) => {
+      if (!e.equipmentId || !e.hours) return false;
+      const value = Number(e.hours);
+      if (Number.isNaN(value) || value <= 0) return false;
+      return value >= e.previous;
+    });
     let successCount = 0;
     let errorCount = 0;
+    const failureDetails: Array<{ equipment: string; message: string }> = [];
 
     for (const entry of validEntries) {
       try {
@@ -1508,14 +1521,30 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         successCount++;
       } catch (error) {
         errorCount++;
+        const equipment = bulkEquipmentList.find((eq) => eq.id === entry.equipmentId);
+        let message = "Unknown error";
+        if (error instanceof Error) {
+          message = error.message;
+        } else if (typeof error === "string") {
+          message = error;
+        }
+        failureDetails.push({
+          equipment: equipment?.equipmentNumber ?? entry.equipmentId,
+          message,
+        });
       }
     }
 
     if (successCount > 0) {
-      toast.success(`Successfully created ${successCount} entr${successCount === 1 ? "y" : "ies"}`);
+      toast.success(`Successfully created ${successCount} entr${successCount === 1 ? "y" : "ies"} out of ${validEntries.length}`);
     }
     if (errorCount > 0) {
-      toast.error(`Failed to create ${errorCount} entr${errorCount === 1 ? "y" : "ies"}`);
+      const topFailures = failureDetails.slice(0, 3)
+        .map((item) => `${item.equipment}: ${item.message}`)
+        .join(" | ");
+      const moreCount = errorCount - Math.min(errorCount, 3);
+      const moreText = errorCount > 3 && moreCount > 0 ? ` | and ${moreCount} more` : "";
+      toast.error(`${topFailures}${moreText}`);
     }
 
     setBulkEntries([]);
@@ -2265,9 +2294,17 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     type="button"
                     onClick={() => {
                       setBulkMode(true);
-                      if (bulkEntries.length === 0) {
-                        setBulkEntries([{ equipmentId: "", hours: "", search: "", searchOpen: false, searchIndex: -1 }]);
-                      }
+                      setBulkEntries(
+                        bulkEquipmentList.map((eq) => {
+                          const previous = Number(eq.currentHours ?? 0);
+                          return {
+                            equipmentId: eq.id,
+                            hours: previous.toFixed(2),
+                            previous,
+                            error: undefined,
+                          };
+                        }),
+                      );
                     }}
                     className={`flex-1 rounded-xl px-4 py-3 text-sm font-bold transition-all ${
                       bulkMode
@@ -2410,273 +2447,102 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       <div className="flex items-center justify-between">
                         <label className="text-sm font-bold text-[var(--color-text)]">Equipment Entries</label>
                         <span className="text-xs font-medium text-[var(--color-text-soft)]">
-                          {bulkEntries.filter(e => e.equipmentId && e.hours && Number(e.hours) > 0).length} of {bulkEntries.length} ready
+                          {bulkEntries.filter((e) => {
+                            const value = Number(e.hours);
+                            return e.equipmentId && !Number.isNaN(value) && value > 0 && value >= e.previous;
+                          }).length}{" "}
+                          of {bulkEntries.length} ready
                         </span>
                       </div>
                       <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
                         {bulkEntries.map((entry, index) => {
-                          const filteredBulk = (() => {
-                            if (!entry.search.trim()) return equipmentOptions;
-                            const search = entry.search.toLowerCase();
-                            return equipmentOptions.filter(
-                              (eq) =>
-                                eq.equipmentNumber.toLowerCase().includes(search)
-                            );
-                          })();
-
-                          const selectedEquipment = entry.equipmentId ? equipmentOptions.find((e) => e.id === entry.equipmentId) : null;
-                          const currentHours = selectedEquipment ? Number(selectedEquipment.currentHours) : 0;
-                          const enteredHours = entry.hours ? Number(entry.hours) : 0;
-                          const hoursError = entry.equipmentId && entry.hours && enteredHours > 0 && enteredHours < currentHours 
-                            ? `${selectedEquipment && selectedEquipment.usageUnit === "KM" ? "Kilometers" : "Hours"} must be at least ${currentHours.toFixed(2)}`
-                            : undefined;
-                          const equipmentError = entry.search && !entry.equipmentId && filteredBulk.length === 0 && entry.search.trim().length > 0
-                            ? "Invalid equipment number"
-                            : undefined;
-                          const hasError = hoursError || equipmentError;
+                          const equipment = bulkEquipmentList.find((eq) => eq.id === entry.equipmentId);
+                          const previous = entry.previous;
+                          const value = entry.hours ? Number(entry.hours) : 0;
+                          const hasError = entry.hours !== "" && (Number.isNaN(value) || value < previous);
+                          const unitLabel = equipment?.usageUnit === "KM" ? "Kilometers" : "Hours";
 
                           return (
-                            <div key={index} className={`flex gap-3 items-start p-4 rounded-xl border-2 ${hasError ? "border-red-400" : "border-[var(--color-surface-strong)]"} bg-gradient-to-br from-white to-[var(--color-surface)] shadow-sm`}>
-                              <div className="relative flex-1">
-                                <input
-                                  type="text"
-                                  value={
-                                    entry.equipmentId
-                                      ? equipmentOptions.find((e) => e.id === entry.equipmentId)?.equipmentNumber || ""
-                                      : entry.search
-                                  }
-                                  onChange={(e) => {
-                                    setBulkEntries((prev) =>
-                                      prev.map((item, i) =>
-                                        i === index
-                                          ? { ...item, search: e.target.value, searchOpen: true, equipmentId: "", searchIndex: -1, error: undefined }
-                                          : item
-                                      )
-                                    );
-                                  }}
-                                  onFocus={() => {
-                                    setBulkEntries((prev) =>
-                                      prev.map((item, i) => (i === index ? { ...item, searchOpen: true } : item))
-                                    );
-                                  }}
-                                  onBlur={() => {
-                                    setTimeout(() => {
-                                      setBulkEntries((prev) =>
-                                        prev.map((item, i) => (i === index ? { ...item, searchOpen: false } : item))
-                                      );
-                                    }, 200);
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "ArrowDown") {
-                                      e.preventDefault();
-                                      setBulkEntries((prev) =>
-                                        prev.map((item, i) =>
-                                          i === index
-                                            ? { ...item, searchOpen: true, searchIndex: item.searchIndex < filteredBulk.length - 1 ? item.searchIndex + 1 : item.searchIndex }
-                                            : item
-                                        )
-                                      );
-                                    } else if (e.key === "ArrowUp") {
-                                      e.preventDefault();
-                                      setBulkEntries((prev) =>
-                                        prev.map((item, i) =>
-                                          i === index ? { ...item, searchIndex: item.searchIndex > 0 ? item.searchIndex - 1 : -1 } : item
-                                        )
-                                      );
-                                    } else if (e.key === "Enter") {
-                                      e.preventDefault();
-                                      if (entry.searchIndex >= 0 && filteredBulk[entry.searchIndex]) {
-                                        setBulkEntries((prev) =>
-                                          prev.map((item, i) =>
-                                            i === index
-                                              ? { ...item, equipmentId: filteredBulk[entry.searchIndex].id, search: "", searchOpen: false, searchIndex: -1, error: undefined }
-                                              : item
-                                          )
-                                        );
-                                        setTimeout(() => {
-                                          const hoursInput = document.getElementById(`bulk-hours-${index}`) as HTMLInputElement;
-                                          hoursInput?.focus();
-                                        }, 50);
-                                      } else if (filteredBulk.length === 1) {
-                                        setBulkEntries((prev) =>
-                                          prev.map((item, i) =>
-                                            i === index
-                                              ? { ...item, equipmentId: filteredBulk[0].id, search: "", searchOpen: false, searchIndex: -1, error: undefined }
-                                              : item
-                                          )
-                                        );
-                                        setTimeout(() => {
-                                          const hoursInput = document.getElementById(`bulk-hours-${index}`) as HTMLInputElement;
-                                          hoursInput?.focus();
-                                        }, 50);
-                                      } else if (filteredBulk.length === 0 && entry.search.trim()) {
-                                        setBulkEntries((prev) =>
-                                          prev.map((item, i) =>
-                                            i === index
-                                              ? { ...item, error: "Invalid equipment number" }
-                                              : item
-                                          )
-                                        );
-                                      } else {
-                                        const nextIndex = index + 1;
-                                        if (nextIndex < bulkEntries.length) {
-                                          const nextInput = document.getElementById(`bulk-equipment-${nextIndex}`) as HTMLInputElement;
-                                          nextInput?.focus();
-                                        } else {
-                                          const hoursInput = document.getElementById(`bulk-hours-${index}`) as HTMLInputElement;
-                                          hoursInput?.focus();
-                                        }
-                                      }
-                                    } else if (e.key === "Escape") {
-                                      setBulkEntries((prev) =>
-                                        prev.map((item, i) => (i === index ? { ...item, searchOpen: false, searchIndex: -1 } : item))
-                                      );
-                                    }
-                                  }}
-                                  className={`h-11 w-full rounded-lg border-2 ${equipmentError ? "border-red-400" : "border-[var(--color-surface-strong)]"} bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20 shadow-sm`}
-                                  placeholder="Equipment number..."
-                                  id={`bulk-equipment-${index}`}
-                                  autoComplete="off"
-                                />
-                                {equipmentError && (
-                                  <p className="mt-1 text-xs font-medium text-red-600">{equipmentError}</p>
-                                )}
-                                {entry.searchOpen && filteredBulk.length > 0 && (
-                                  <div className="fixed z-[9999] mt-2 max-h-60 w-[calc(100vw-2rem)] sm:w-auto min-w-[200px] overflow-auto rounded-xl border-2 border-[var(--color-surface-strong)] bg-white shadow-2xl" style={{ 
-                                    top: typeof window !== 'undefined' ? (document.getElementById(`bulk-equipment-${index}`)?.getBoundingClientRect().bottom || 0) + window.scrollY + 4 : 'auto',
-                                    left: typeof window !== 'undefined' ? (document.getElementById(`bulk-equipment-${index}`)?.getBoundingClientRect().left || 0) + window.scrollX : 'auto',
-                                  }}>
-                                    {filteredBulk.map((eq, idx) => (
-                                      <button
-                                        key={eq.id}
-                                        type="button"
-                                        onClick={() => {
-                                          setBulkEntries((prev) =>
-                                            prev.map((item, i) =>
-                                              i === index
-                                                ? { ...item, equipmentId: eq.id, search: "", searchOpen: false, searchIndex: -1, error: undefined }
-                                                : item
-                                            )
-                                          );
-                                          setTimeout(() => {
-                                            const hoursInput = document.getElementById(`bulk-hours-${index}`) as HTMLInputElement;
-                                            hoursInput?.focus();
-                                          }, 50);
-                                        }}
-                                        className={`w-full px-4 py-3 text-left transition-colors ${
-                                          idx === entry.searchIndex
-                                            ? "bg-gradient-to-r from-[var(--color-primary)]/20 to-[var(--color-primary)]/10"
-                                            : "hover:bg-gradient-to-r hover:from-[var(--color-primary)]/10 hover:to-transparent"
-                                        }`}
-                                      >
-                                        <p className="text-sm font-bold text-[var(--color-text)]">
-                                          {eq.equipmentNumber}
-                                        </p>
-                                      </button>
-                                    ))}
-                                  </div>
-                                )}
+                            <div
+                              key={entry.equipmentId}
+                              className={`flex gap-4 items-center p-3 rounded-xl border-2 ${hasError ? "border-red-400" : "border-[var(--color-surface-strong)]"} bg-gradient-to-br from-white to-[var(--color-surface)] shadow-sm`}
+                            >
+                              <div className="flex-1">
+                                <p className="text-xs font-semibold text-[var(--color-text)]">
+                                  {equipment?.equipmentNumber}{" "}
+                                  <span className="text-[10px] font-medium text-[var(--color-text-soft)]">
+                                    {equipment?.displayName}
+                                  </span>
+                                </p>
+                                <p className="text-[10px] text-[var(--color-text-soft)] mt-1">
+                                  Previous {unitLabel}: {previous.toFixed(2)}
+                                </p>
                               </div>
-                              <div className="w-28">
+                              <div className="w-40">
                                 <input
                                   type="number"
-                                  min={currentHours}
+                                  min={previous}
                                   step={0.1}
                                   value={entry.hours}
                                   onChange={(e) => {
-                                    const newHours = e.target.value;
+                                    const newValue = e.target.value;
                                     setBulkEntries((prev) =>
-                                      prev.map((item, i) => {
-                                        if (i === index) {
-                                          const hours = newHours ? Number(newHours) : 0;
-                                          const equipment = item.equipmentId ? equipmentOptions.find((eq) => eq.id === item.equipmentId) : null;
-                                          const error = item.equipmentId && hours > 0 && hours < currentHours
-                                            ? `${equipment && equipment.usageUnit === "KM" ? "Kilometers" : "Hours"} must be at least ${currentHours.toFixed(2)}`
-                                            : undefined;
-                                          return { ...item, hours: newHours, error };
-                                        }
-                                        return item;
-                                      })
+                                      prev.map((item, i) =>
+                                        i === index ? { ...item, hours: newValue } : item,
+                                      ),
                                     );
                                   }}
+                                  onFocus={(e) => e.target.select()}
                                   onKeyDown={(e) => {
                                     if (e.key === "Enter") {
                                       e.preventDefault();
-                                      if (entry.equipmentId && entry.hours && Number(entry.hours) >= currentHours) {
+                                      const numeric = Number(entry.hours);
+                                      if (!Number.isNaN(numeric) && numeric >= previous) {
                                         const nextIndex = index + 1;
                                         if (nextIndex < bulkEntries.length) {
-                                          const hoursInput = document.getElementById(`bulk-hours-${nextIndex}`) as HTMLInputElement;
+                                          const hoursInput = document.getElementById(
+                                            `bulk-hours-${nextIndex}`,
+                                          ) as HTMLInputElement | null;
                                           hoursInput?.focus();
-                                        } else {
-                                          setBulkEntries((prev) => [
-                                            ...prev,
-                                            { equipmentId: "", hours: "", search: "", searchOpen: false, searchIndex: -1 },
-                                          ]);
-                                          setTimeout(() => {
-                                            const nextEquipmentInput = document.getElementById(`bulk-equipment-${nextIndex}`) as HTMLInputElement;
-                                            nextEquipmentInput?.focus();
-                                          }, 50);
                                         }
                                       }
                                     }
                                   }}
-                                  className={`h-11 w-full rounded-lg border-2 ${hoursError ? "border-red-400" : "border-[var(--color-surface-strong)]"} bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20 shadow-sm`}
-                                  placeholder={currentHours > 0 ? `Min: ${currentHours.toFixed(1)}` : selectedEquipment && selectedEquipment.usageUnit === "KM" ? "Kilometers" : "Hours"}
+                                  className={`h-11 w-full rounded-lg border-2 ${
+                                    hasError
+                                      ? "border-red-400"
+                                      : "border-[var(--color-surface-strong)]"
+                                  } bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20 shadow-sm`}
+                                  placeholder={`Min: ${previous.toFixed(2)}`}
                                   id={`bulk-hours-${index}`}
                                 />
-                                {hoursError && (
-                                  <p className="mt-1 text-xs font-medium text-red-600">{hoursError}</p>
+                                {hasError && (
+                                  <p className="mt-1 text-xs font-medium text-red-600">
+                                    {unitLabel} must be at least {previous.toFixed(2)}
+                                  </p>
                                 )}
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => setBulkEntries((prev) => prev.filter((_, i) => i !== index))}
-                                className="flex h-11 w-11 items-center justify-center rounded-lg bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] text-white shadow-md transition-all hover:scale-110 hover:shadow-lg active:scale-95"
-                              >
-                                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                              </button>
                             </div>
                           );
                         })}
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBulkEntries((prev) => [
-                            ...prev,
-                            { equipmentId: "", hours: "", search: "", searchOpen: false, searchIndex: -1 },
-                          ]);
-                          setTimeout(() => {
-                            const lastIndex = bulkEntries.length;
-                            const nextEquipmentInput = document.getElementById(`bulk-equipment-${lastIndex}`) as HTMLInputElement;
-                            nextEquipmentInput?.focus();
-                          }, 50);
-                        }}
-                        className="w-full rounded-xl border-2 border-dashed border-[var(--color-primary)]/30 bg-gradient-to-br from-[var(--color-primary)]/5 to-transparent px-4 py-3 text-sm font-bold text-[var(--color-primary)] transition-all hover:border-[var(--color-primary)]/50 hover:from-[var(--color-primary)]/10 hover:to-[var(--color-primary)]/5 hover:scale-[1.01] shadow-sm"
-                      >
-                        + Add Equipment Row
-                      </button>
                     </div>
                     <button
                       type="button"
                       onClick={onBulkSubmit}
                       disabled={bulkEntries.length === 0 || bulkEntries.every((e) => {
                         if (!e.equipmentId || !e.hours) return true;
-                        const equipment = equipmentOptions.find((eq) => eq.id === e.equipmentId);
-                        if (!equipment) return true;
-                        const enteredHours = Number(e.hours);
-                        return enteredHours <= 0 || enteredHours < Number(equipment.currentHours);
+                        const value = Number(e.hours);
+                        if (Number.isNaN(value) || value <= 0) return true;
+                        return value < e.previous;
                       })}
                       className="w-full rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[var(--color-accent)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                     >
-                      Submit All Entries ({bulkEntries.filter(e => {
+                      Submit All Entries ({bulkEntries.filter((e) => {
                         if (!e.equipmentId || !e.hours) return false;
-                        const equipment = equipmentOptions.find((eq) => eq.id === e.equipmentId);
-                        if (!equipment) return false;
-                        const enteredHours = Number(e.hours);
-                        return enteredHours > 0 && enteredHours >= Number(equipment.currentHours);
+                        const value = Number(e.hours);
+                        if (Number.isNaN(value) || value <= 0) return false;
+                        return value >= e.previous;
                       }).length})
                     </button>
                   </div>
