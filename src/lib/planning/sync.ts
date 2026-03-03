@@ -1,4 +1,4 @@
-import { AlertLevel, CheckStatus } from "@prisma/client";
+import { AlertLevel, CheckStatus, TriggerType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { buildYearlyPlan, deriveForecastAverageHoursPerDay, determineStatus } from "@/lib/planning/engine";
 
@@ -146,7 +146,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     checkCode: string;
     dueHours: number;
     dueDate: Date;
-    triggerType: string;
+    triggerType: TriggerType;
     status: CheckStatus;
   }> = [];
 
@@ -154,14 +154,14 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     id: string;
     checkRuleId: string;
     dueDate: Date;
-    triggerType: string;
+    triggerType: TriggerType;
   }> = [];
 
   const toUpdateStatus: Array<{
     id: string;
     checkRuleId: string;
     dueDate: Date;
-    triggerType: string;
+    triggerType: TriggerType;
     status: CheckStatus;
   }> = [];
 

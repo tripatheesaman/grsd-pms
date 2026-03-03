@@ -45,7 +45,7 @@ services:
       - node_modules_dev:/app/node_modules
       - ./uploads-dev:/data/uploads
       - ./.next:/app/.next
-    command: npm run dev
+    command: sh -c "if [ \"$NEXT_BUILD\" = \"1\" ]; then npm run build; else npm run dev; fi"
 
 volumes:
   db_dev_data:
