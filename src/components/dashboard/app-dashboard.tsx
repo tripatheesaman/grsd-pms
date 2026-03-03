@@ -8,6 +8,7 @@ import {
   useAlerts,
   useAnalytics,
   useApproveEntry,
+  useApproveEntriesByDate,
   useCheckSheets,
   useCreateEntry,
   useCreateEquipment,
@@ -4947,57 +4948,101 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           {pendingEntries.data.length} pending entr{pendingEntries.data.length === 1 ? "y" : "ies"} awaiting approval
                         </p>
                       </div>
-                      <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
-                        {pendingEntries.data.map((entry) => (
-                          <PendingEntryCard
-                            key={entry.id}
-                            entry={entry}
-                            onApprove={(id) => {
-                              approveEntry.mutate(id, {
-                                onSuccess: () => {
-                                  toast.success("Entry approved successfully");
-                                },
-                                onError: (error) => {
-                                  toast.error(error instanceof Error ? error.message : "Failed to approve entry");
-                                },
-                              });
-                            }}
-                            onReject={(id, reason) => {
-                              rejectEntry.mutate({ entryId: id, reason }, {
-                                onSuccess: () => {
-                                  toast.success("Entry rejected");
-                                },
-                                onError: (error) => {
-                                  toast.error(error instanceof Error ? error.message : "Failed to reject entry");
-                                },
-                              });
-                            }}
-                            onUpdate={(id, entryDate, hoursRun) => {
-                              updateEntry.mutate({ entryId: id, entryDate, hoursRun }, {
-                                onSuccess: () => {
-                                  toast.success("Entry updated successfully");
-                                },
-                                onError: (error) => {
-                                  toast.error(error instanceof Error ? error.message : "Failed to update entry");
-                                },
-                              });
-                            }}
-                            onDelete={(id) => {
-                              deleteEntry.mutate(id, {
-                                onSuccess: () => {
-                                  toast.success("Entry deleted successfully");
-                                },
-                                onError: (error) => {
-                                  toast.error(error instanceof Error ? error.message : "Failed to delete entry");
-                                },
-                              });
-                            }}
-                            isApproving={approveEntry.isPending}
-                            isRejecting={rejectEntry.isPending}
-                            isUpdating={updateEntry.isPending}
-                            isDeleting={deleteEntry.isPending}
-                          />
-                        ))}
+                      <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
+                        {Object.entries(
+                          pendingEntries.data.reduce<Record<string, typeof pendingEntries.data>>((groups, entry) => {
+                            const dateKey = entry.entryDate.split("T")[0];
+                            if (!groups[dateKey]) groups[dateKey] = [];
+                            groups[dateKey].push(entry);
+                            return groups;
+                          }, {}),
+                        )
+                          .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+                          .map(([dateKey, entriesForDate]) => (
+                            <div key={dateKey} className="rounded-xl border border-[var(--color-surface-strong)] bg-white p-3 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-sm font-bold text-[var(--color-text)]">
+                                    {formatDate(new Date(dateKey))}
+                                  </p>
+                                  <p className="text-xs text-[var(--color-text-soft)]">
+                                    {entriesForDate.length} entr{entriesForDate.length === 1 ? "y" : "ies"} on this day
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!entriesForDate[0]) return;
+                                    const entryDateIso = entriesForDate[0].entryDate.split("T")[0];
+                                    approveEntriesByDate.mutate(entryDateIso, {
+                                      onSuccess: (result) => {
+                                        toast.success(`Approved ${result.approvedCount} entr${result.approvedCount === 1 ? "y" : "ies"} for ${formatDate(new Date(entryDateIso))}`);
+                                      },
+                                      onError: (error) => {
+                                        toast.error(error instanceof Error ? error.message : "Failed to approve entries for this day");
+                                      },
+                                    });
+                                  }}
+                                  disabled={approveEntriesByDate.isPending}
+                                  className="rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-4 py-2 text-xs font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {approveEntriesByDate.isPending ? "Approving..." : "Approve all for this day"}
+                                </button>
+                              </div>
+                              <div className="space-y-3">
+                                {entriesForDate.map((entry) => (
+                                  <PendingEntryCard
+                                    key={entry.id}
+                                    entry={entry}
+                                    onApprove={(id) => {
+                                      approveEntry.mutate(id, {
+                                        onSuccess: () => {
+                                          toast.success("Entry approved successfully");
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to approve entry");
+                                        },
+                                      });
+                                    }}
+                                    onReject={(id, reason) => {
+                                      rejectEntry.mutate({ entryId: id, reason }, {
+                                        onSuccess: () => {
+                                          toast.success("Entry rejected");
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to reject entry");
+                                        },
+                                      });
+                                    }}
+                                    onUpdate={(id, entryDate, hoursRun) => {
+                                      updateEntry.mutate({ entryId: id, entryDate, hoursRun }, {
+                                        onSuccess: () => {
+                                          toast.success("Entry updated successfully");
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to update entry");
+                                        },
+                                      });
+                                    }}
+                                    onDelete={(id) => {
+                                      deleteEntry.mutate(id, {
+                                        onSuccess: () => {
+                                          toast.success("Entry deleted successfully");
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to delete entry");
+                                        },
+                                      });
+                                    }}
+                                    isApproving={approveEntry.isPending}
+                                    isRejecting={rejectEntry.isPending}
+                                    isUpdating={updateEntry.isPending}
+                                    isDeleting={deleteEntry.isPending}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
                       </div>
                     </div>
                   ) : (

@@ -391,6 +391,22 @@ export function useApproveEntry() {
   });
 }
 
+export function useApproveEntriesByDate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (entryDate: string) =>
+      apiPost<{ approvedCount: number; date: string }>(
+        "/api/entries/approve-day",
+        { entryDate },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["entries"] });
+      queryClient.invalidateQueries({ queryKey: ["equipments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+    },
+  });
+}
+
 export function useRejectEntry() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -811,12 +827,14 @@ export function useUploadCheckRuleTemplatePdf() {
       const formData = new FormData();
       formData.append("file", payload.file);
       const response = await fetch(
-        `/api/equipment/${payload.equipmentId}/check-rules/${payload.ruleId}/template-file`,
+        apiPath(
+          `/api/equipment/${payload.equipmentId}/check-rules/${payload.ruleId}/template-file`,
+        ),
         {
           method: "POST",
           body: formData,
           credentials: "include",
-        }
+        },
       );
       const result = await response.json();
       if (!response.ok) {

@@ -35,6 +35,45 @@ type RouteContext = {
   params: Promise<{ equipmentId: string }>;
 };
 
+let systemConfigCache: {
+  approachingOffsetHours: number;
+  issueOffsetHours: number;
+  nearOffsetHours: number;
+  timestamp: number;
+} | null = null;
+
+const CONFIG_CACHE_TTL = 60000;
+
+async function getSystemThresholds() {
+  const now = Date.now();
+  if (systemConfigCache && (now - systemConfigCache.timestamp) < CONFIG_CACHE_TTL) {
+    return {
+      approachingOffsetHours: systemConfigCache.approachingOffsetHours,
+      issueOffsetHours: systemConfigCache.issueOffsetHours,
+      nearOffsetHours: systemConfigCache.nearOffsetHours,
+    };
+  }
+
+  const [approachingConfig, issueConfig, nearConfig] = await Promise.all([
+    prisma.systemConfig.findUnique({ where: { key: "approaching_offset_hours" } }).catch(() => null),
+    prisma.systemConfig.findUnique({ where: { key: "issue_offset_hours" } }).catch(() => null),
+    prisma.systemConfig.findUnique({ where: { key: "near_offset_hours" } }).catch(() => null),
+  ]);
+
+  const thresholds = {
+    approachingOffsetHours: approachingConfig ? Number(approachingConfig.value) : 120,
+    issueOffsetHours: issueConfig ? Number(issueConfig.value) : 40,
+    nearOffsetHours: nearConfig ? Number(nearConfig.value) : 10,
+  };
+
+  systemConfigCache = {
+    ...thresholds,
+    timestamp: now,
+  };
+
+  return thresholds;
+}
+
 export async function GET(_: Request, context: RouteContext) {
   const access = await requireAccess({
     minRole: "USER",
@@ -47,6 +86,9 @@ export async function GET(_: Request, context: RouteContext) {
   const { equipmentId } = await context.params;
   const equipment = await prisma.equipment.findUnique({
     where: { id: equipmentId },
+    select: {
+      equipmentNumber: true,
+    },
   });
 
   if (!equipment) {
@@ -58,37 +100,39 @@ export async function GET(_: Request, context: RouteContext) {
     orderBy: { code: "asc" },
   });
 
-  const rulesWithTemplateStatus = await Promise.all(
-    rules.map(async (rule) => {
-      const safeEquipment = equipment.equipmentNumber.replace(/[^A-Za-z0-9_-]/g, "_");
-      const safeCode = rule.code.toUpperCase();
-      const templateFileName = `${safeEquipment}_${safeCode}.pdf`;
-      const absolutePath = buildUploadPath("checksheets", templateFileName);
+  const safeEquipment = equipment.equipmentNumber.replace(/[^A-Za-z0-9_-]/g, "_");
+  const templateChecks = rules.map((rule) => {
+    const safeCode = rule.code.toUpperCase();
+    const templateFileName = `${safeEquipment}_${safeCode}.pdf`;
+    const absolutePath = buildUploadPath("checksheets", templateFileName);
+    return { rule, absolutePath, templateFileName };
+  });
 
-      let templatePdfPath: string | null = null;
+  const templateStatuses = await Promise.all(
+    templateChecks.map(async ({ absolutePath, templateFileName }) => {
       try {
         await fsAccess(absolutePath, constants.F_OK);
-        templatePdfPath = `${UPLOADS_BASE_URL}/checksheets/${templateFileName}`;
+        return `${UPLOADS_BASE_URL}/checksheets/${templateFileName}`;
       } catch {
-        templatePdfPath = null;
+        return null;
       }
-
-      return {
-        id: rule.id,
-        code: rule.code,
-        intervalHours: rule.intervalHours,
-        approachingOffsetHours: rule.approachingOffsetHours,
-        issueOffsetHours: rule.issueOffsetHours,
-        nearOffsetHours: rule.nearOffsetHours,
-        intervalTimeValue: rule.intervalTimeValue,
-        intervalTimeUnit: rule.intervalTimeUnit,
-        isActive: rule.isActive,
-        templatePdfPath,
-      };
     })
   );
 
-  return ok(rulesWithTemplateStatus);
+  return ok(
+    rules.map((rule, index) => ({
+      id: rule.id,
+      code: rule.code,
+      intervalHours: rule.intervalHours,
+      approachingOffsetHours: rule.approachingOffsetHours,
+      issueOffsetHours: rule.issueOffsetHours,
+      nearOffsetHours: rule.nearOffsetHours,
+      intervalTimeValue: rule.intervalTimeValue,
+      intervalTimeUnit: rule.intervalTimeUnit,
+      isActive: rule.isActive,
+      templatePdfPath: templateStatuses[index],
+    }))
+  );
 }
 
 export async function POST(request: Request, context: RouteContext) {
@@ -127,15 +171,7 @@ export async function POST(request: Request, context: RouteContext) {
     return fail("CONFLICT", "Check rule with this code already exists", 409);
   }
 
-  const [approachingConfig, issueConfig, nearConfig] = await Promise.all([
-    (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_hours" } }).catch(() => null),
-    (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_hours" } }).catch(() => null),
-    (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }).catch(() => null),
-  ]);
-
-  const approachingOffsetHours = approachingConfig ? Number(approachingConfig.value) : 120;
-  const issueOffsetHours = issueConfig ? Number(issueConfig.value) : 40;
-  const nearOffsetHours = nearConfig ? Number(nearConfig.value) : 10;
+  const thresholds = await getSystemThresholds();
 
   const rule = await prisma.checkRule.create({
     data: {
@@ -144,13 +180,13 @@ export async function POST(request: Request, context: RouteContext) {
       intervalHours: parsed.data.intervalHours,
       intervalTimeValue: parsed.data.intervalTimeValue ?? null,
       intervalTimeUnit: parsed.data.intervalTimeUnit ?? null,
-      approachingOffsetHours,
-      issueOffsetHours,
-      nearOffsetHours,
+      approachingOffsetHours: thresholds.approachingOffsetHours,
+      issueOffsetHours: thresholds.issueOffsetHours,
+      nearOffsetHours: thresholds.nearOffsetHours,
     },
   });
 
-  await writeAuditLog({
+  writeAuditLog({
     userId: access.user.id,
     action: "checkRule.create",
     entityType: "CheckRule",
@@ -161,7 +197,7 @@ export async function POST(request: Request, context: RouteContext) {
       intervalHours: rule.intervalHours,
     },
     request,
-  });
+  }).catch(() => null);
 
   return ok(
     {

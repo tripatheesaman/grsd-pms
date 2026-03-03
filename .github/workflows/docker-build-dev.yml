@@ -1,14 +1,18 @@
-name: Build & Push PMS (dev)
+name: Build & Push PMS Development Image
 
 on:
   push:
-    branches: ["dev"]
+    branches:
+      - develop
+      - dev
   pull_request:
-    branches: ["dev"]
+    branches:
+      - develop
+      - dev
 
 jobs:
   build:
-    name: CI - Docker build (dev)
+    name: Build And Push Development Image
     runs-on: ubuntu-latest
 
     steps:
@@ -18,41 +22,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub (push only)
-        if: github.event_name == 'push'
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Verify required public build vars are set
-        run: |
-          test -n "${{ vars.NEXT_PUBLIC_BASE_PATH }}" || (echo "Missing var: NEXT_PUBLIC_BASE_PATH" && exit 1)
-
-      # PR to dev: build-only (no push)
-      - name: Build PMS (PR build only)
-        if: github.event_name == 'pull_request'
+      - name: Build and push development image
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
-          push: false
-          build-args: |
-            NEXT_PUBLIC_BASE_PATH=${{ vars.NEXT_PUBLIC_BASE_PATH }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # Push to dev: publish :dev
-      - name: Build & push PMS (:dev)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
+          file: Dockerfile.dev
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/grsd-pms:dev
-          build-args: |
-            NEXT_PUBLIC_BASE_PATH=${{ vars.NEXT_PUBLIC_BASE_PATH }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            tripatheesaman/grsd-pms:dev
+            tripatheesaman/grsd-pms:dev-${{ github.sha }}

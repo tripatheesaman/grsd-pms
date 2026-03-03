@@ -1,6 +1,5 @@
-import { z } from "zod";
 import { EntryStatus } from "@prisma/client";
-import { parseBody, requireAccess } from "@/lib/api/guard";
+import { requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
 import { deriveForecastAverageHoursPerDay } from "@/lib/planning/engine";
@@ -26,7 +25,13 @@ export async function PATCH(request: Request, context: RouteContext) {
   const entry = await prisma.dailyEntry.findUnique({
     where: { id: entryId },
     include: {
-      equipment: true,
+      equipment: {
+        select: {
+          id: true,
+          currentHours: true,
+          averageHoursPerDay: true,
+        },
+      },
     },
   });
 
@@ -38,50 +43,53 @@ export async function PATCH(request: Request, context: RouteContext) {
     return fail("BAD_REQUEST", "Entry is not pending approval", 400);
   }
 
-  const previousEntry = await prisma.dailyEntry.findFirst({
-    where: {
-      equipmentId: entry.equipmentId,
-      status: EntryStatus.APPROVED,
-      entryDate: {
-        lt: entry.entryDate,
+  const [previousEntry, hasAnyApprovedEntries, recentEntries] = await Promise.all([
+    prisma.dailyEntry.findFirst({
+      where: {
+        equipmentId: entry.equipmentId,
+        status: EntryStatus.APPROVED,
+        entryDate: {
+          lt: entry.entryDate,
+        },
       },
-    },
-    orderBy: {
-      entryDate: "desc",
-    },
-  });
-
-  const hasAnyApprovedEntries = await prisma.dailyEntry.count({
-    where: {
-      equipmentId: entry.equipmentId,
-      status: EntryStatus.APPROVED,
-    },
-  }) > 0;
+      orderBy: {
+        entryDate: "desc",
+      },
+      select: {
+        hoursRun: true,
+      },
+    }),
+    prisma.dailyEntry.count({
+      where: {
+        equipmentId: entry.equipmentId,
+        status: EntryStatus.APPROVED,
+      },
+    }),
+    prisma.dailyEntry.findMany({
+      where: {
+        equipmentId: entry.equipmentId,
+        status: EntryStatus.APPROVED,
+      },
+      select: {
+        entryDate: true,
+        hoursRun: true,
+      },
+      orderBy: {
+        entryDate: "asc",
+      },
+      take: 45,
+    }),
+  ]);
 
   const previousHours = previousEntry
     ? Number(previousEntry.hoursRun)
-    : hasAnyApprovedEntries
+    : hasAnyApprovedEntries > 0
       ? 0
       : Number(entry.equipment.currentHours);
 
   if (Number(entry.hoursRun) < previousHours) {
     return fail("BAD_REQUEST", `Hours must be at least ${previousHours.toFixed(2)} (previous entry hours)`, 400);
   }
-
-  const recentEntries = await prisma.dailyEntry.findMany({
-    where: {
-      equipmentId: entry.equipmentId,
-      status: EntryStatus.APPROVED,
-    },
-    select: {
-      entryDate: true,
-      hoursRun: true,
-    },
-    orderBy: {
-      entryDate: "asc",
-    },
-    take: 45,
-  });
 
   const sortedWithNew = [
     ...recentEntries.map((e) => ({ date: e.entryDate, hours: Number(e.hoursRun) })),
@@ -129,9 +137,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     }),
   ]);
 
-  await syncEquipmentPlan(entry.equipmentId, new Date().getFullYear());
+  syncEquipmentPlan(entry.equipmentId, new Date().getFullYear()).catch(() => null);
 
-  await writeAuditLog({
+  writeAuditLog({
     userId: access.user.id,
     action: "equipment.entry.approve",
     entityType: "DailyEntry",
@@ -143,7 +151,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       newCurrentHours: Number(newCurrentHours.toFixed(2)),
     },
     request,
-  });
+  }).catch(() => null);
 
   return ok({
     id: entryId,

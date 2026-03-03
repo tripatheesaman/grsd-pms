@@ -31,10 +31,14 @@ export async function GET() {
     where: {
       isActive: true,
     },
-    include: {
+    select: {
+      id: true,
+      equipmentClass: true,
+      averageHoursPerDay: true,
       entries: {
         select: {
           hoursRun: true,
+          entryDate: true,
         },
         orderBy: {
           entryDate: "asc",
