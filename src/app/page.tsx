@@ -4,6 +4,8 @@ import { AuthScreen } from "@/components/auth/auth-screen";
 import { AppDashboard } from "@/components/dashboard/app-dashboard";
 import { useCurrentUser } from "@/hooks/use-auth";
 
+export const dynamic = 'force-dynamic';
+
 export default function Home() {
   const currentUser = useCurrentUser();
 
