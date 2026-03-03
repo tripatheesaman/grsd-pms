@@ -801,6 +801,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const updateSystemConfig = useUpdateSystemConfig();
   const pendingEntries = usePendingEntries();
   const approveEntry = useApproveEntry();
+  const approveEntriesByDate = useApproveEntriesByDate();
   const rejectEntry = useRejectEntry();
   const updateEntry = useUpdateEntry();
   const deleteEntry = useDeleteEntry();
