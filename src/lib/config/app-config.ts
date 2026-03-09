@@ -20,7 +20,6 @@ export function withBasePath(path: string): string {
 }
 
 export function apiPath(path: string): string {
-  // Expect paths like "/api/..." or "api/..."
   const normalized = normalizePath(path);
   return `${BASE_PATH}${normalized}`;
 }

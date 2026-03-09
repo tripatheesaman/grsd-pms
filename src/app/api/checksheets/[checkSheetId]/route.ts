@@ -6,11 +6,14 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
+import { sendCheckEmail } from "@/lib/email";
 
 const updateSchema = z.object({
   action: z.enum(["issue", "complete"]),
   date: z.string().datetime(),
   completedHours: z.number().nonnegative().optional(),
+  remarks: z.string().max(1000).optional(),
+  technicianIds: z.array(z.string()).optional(),
 });
 
 type RouteContext = {
@@ -39,10 +42,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     where: {
       id: checkSheetId,
     },
-    select: {
-      id: true,
-      equipmentId: true,
-      status: true,
+    include: {
+      equipment: true,
     },
   });
   if (!existing) {
@@ -51,22 +52,52 @@ export async function PATCH(request: Request, context: RouteContext) {
 
   const valueDate = new Date(parsed.data.date);
   
-  await prisma.checkSheet.update({
-    where: {
-      id: checkSheetId,
-    },
-    data:
-      parsed.data.action === "issue"
-        ? {
-            issuedAt: valueDate,
-            status: CheckStatus.ISSUED,
-          }
-        : {
-            completedAt: valueDate,
-            completedHours: parsed.data.completedHours !== undefined ? parsed.data.completedHours : null,
-            status: CheckStatus.COMPLETED,
-          },
-  });
+  if (parsed.data.action === "complete") {
+    await prisma.$transaction(async (tx) => {
+      await tx.checkSheet.update({
+        where: {
+          id: checkSheetId,
+        },
+        data: {
+          completedAt: valueDate,
+          completedHours: parsed.data.completedHours !== undefined ? parsed.data.completedHours : null,
+          remarks: parsed.data.remarks || null,
+          status: CheckStatus.COMPLETED,
+        },
+      });
+
+      if (parsed.data.technicianIds && parsed.data.technicianIds.length > 0) {
+        await tx.checkSheetTechnician.deleteMany({
+          where: { checkSheetId },
+        });
+
+        await tx.checkSheetTechnician.createMany({
+          data: parsed.data.technicianIds.map((technicianId) => ({
+            checkSheetId,
+            technicianId,
+          })),
+        });
+      }
+    });
+  } else {
+    const updated = await prisma.checkSheet.update({
+      where: {
+        id: checkSheetId,
+      },
+      data: {
+        issuedAt: valueDate,
+        status: CheckStatus.ISSUED,
+      },
+    });
+
+    sendCheckEmail({
+      type: "issued",
+      check: {
+        ...updated,
+        equipment: existing.equipment,
+      },
+    }).catch(() => null);
+  }
 
   syncEquipmentPlan(existing.equipmentId, new Date().getFullYear()).catch(() => null);
 
@@ -79,6 +110,8 @@ export async function PATCH(request: Request, context: RouteContext) {
       action: parsed.data.action,
       date: valueDate.toISOString(),
       completedHours: parsed.data.completedHours ?? null,
+      remarks: parsed.data.remarks ?? null,
+      technicianIds: parsed.data.technicianIds ?? [],
     },
     request,
   }).catch(() => null);
