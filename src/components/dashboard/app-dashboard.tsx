@@ -52,6 +52,11 @@ import {
   useDeleteCompletedCheckPdf,
   useEndGrounding,
   useEquipmentHistory,
+  useTechnicians,
+  useCreateTechnician,
+  useUpdateTechnician,
+  useDeleteTechnician,
+  type Technician,
 } from "@/hooks/use-dashboard-data";
 import { UserRole } from "@/types/api";
 import { formatDate } from "@/lib/utils/date";
@@ -774,6 +779,9 @@ const sections = [
   { key: "all-checks", label: "All Checks", icon: "📋" },
   { key: "equipment-history", label: "Equipment History", icon: "📚" },
   { key: "equipment-management", label: "Equipment Management", icon: "🔧" },
+  { key: "user-management", label: "User Management", icon: "👥" },
+  { key: "permission-management", label: "Permission Management", icon: "🔐" },
+  { key: "technician-management", label: "Technician Management", icon: "👷" },
   { key: "admin", label: "Admin", icon: "⚙️" },
 ] as const;
 
@@ -805,6 +813,10 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const rejectEntry = useRejectEntry();
   const updateEntry = useUpdateEntry();
   const deleteEntry = useDeleteEntry();
+  const technicians = useTechnicians();
+  const createTechnician = useCreateTechnician();
+  const updateTechnician = useUpdateTechnician();
+  const deleteTechnician = useDeleteTechnician();
 
   useEffect(() => {
     if (systemConfig.data) {
@@ -812,6 +824,17 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       setApproachingHours(String(systemConfig.data.approachingOffsetHours));
       setIssueHours(String(systemConfig.data.issueOffsetHours));
       setNearHours(String(systemConfig.data.nearOffsetHours));
+      setSectionCode((systemConfig.data as any).sectionCode || "");
+      setEmailEnabled(systemConfig.data.emailEnabled);
+      setEmailSmtpHost(systemConfig.data.emailSmtpHost || "");
+      setEmailSmtpPort(String(systemConfig.data.emailSmtpPort ?? 587));
+      setEmailSmtpUsername(systemConfig.data.emailSmtpUsername || "");
+      setEmailSmtpPassword(systemConfig.data.emailSmtpPassword || "");
+      setEmailRecipients(systemConfig.data.emailRecipients || "");
+      setEmailCcs(systemConfig.data.emailCcs || "");
+      setEmailTemplateSubject(systemConfig.data.emailTemplateSubject || "");
+      setEmailTemplateBody(systemConfig.data.emailTemplateBody || "");
+      setEmailReminderDaysBefore(String(systemConfig.data.emailReminderDaysBefore ?? 3));
     }
   }, [systemConfig.data]);
 
@@ -895,6 +918,31 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [approachingHours, setApproachingHours] = useState("120");
   const [issueHours, setIssueHours] = useState("40");
   const [nearHours, setNearHours] = useState("10");
+  const [sectionCode, setSectionCode] = useState("");
+  const [emailEnabled, setEmailEnabled] = useState(false);
+  const [emailSmtpHost, setEmailSmtpHost] = useState("");
+  const [emailSmtpPort, setEmailSmtpPort] = useState("587");
+  const [emailSmtpUsername, setEmailSmtpUsername] = useState("");
+  const [emailSmtpPassword, setEmailSmtpPassword] = useState("");
+  const [emailRecipients, setEmailRecipients] = useState("");
+  const [emailCcs, setEmailCcs] = useState("");
+  const [emailTemplateSubject, setEmailTemplateSubject] = useState("");
+  const [emailTemplateBody, setEmailTemplateBody] = useState("");
+  const [emailReminderDaysBefore, setEmailReminderDaysBefore] = useState("3");
+  const [historyExportEquipmentFrom, setHistoryExportEquipmentFrom] = useState("");
+  const [historyExportEquipmentTo, setHistoryExportEquipmentTo] = useState("");
+  const [historyExportDateFrom, setHistoryExportDateFrom] = useState("");
+  const [historyExportDateTo, setHistoryExportDateTo] = useState("");
+  const [completeRemarks, setCompleteRemarks] = useState("");
+  const [completeTechnicianIds, setCompleteTechnicianIds] = useState<string[]>([]);
+  const [newTechnicianName, setNewTechnicianName] = useState("");
+  const [newTechnicianStaffId, setNewTechnicianStaffId] = useState("");
+  const [newTechnicianDesignation, setNewTechnicianDesignation] = useState("");
+  const [editingTechnicianId, setEditingTechnicianId] = useState<string | null>(null);
+  const [editTechnicianName, setEditTechnicianName] = useState("");
+  const [editTechnicianStaffId, setEditTechnicianStaffId] = useState("");
+  const [editTechnicianDesignation, setEditTechnicianDesignation] = useState("");
+  const [editTechnicianIsActive, setEditTechnicianIsActive] = useState(true);
   const [equipmentMgmtSearch, setEquipmentMgmtSearch] = useState("");
   const [equipmentMgmtClassFilter, setEquipmentMgmtClassFilter] = useState("ALL");
   const [equipmentMgmtStatusFilter, setEquipmentMgmtStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
@@ -991,6 +1039,11 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     approvedByEmail: string | null;
     approvedAt: string | null;
   } | null>(null);
+  const [planExportEquipmentFrom, setPlanExportEquipmentFrom] = useState("");
+  const [planExportEquipmentTo, setPlanExportEquipmentTo] = useState("");
+  const [planExportDateFrom, setPlanExportDateFrom] = useState("");
+  const [planExportDateTo, setPlanExportDateTo] = useState("");
+  const [planExportMode, setPlanExportMode] = useState<"equipment" | "detailed" | "pictorial">("equipment");
   const [selectedHistoryCheck, setSelectedHistoryCheck] = useState<{
     id: string;
     checkCode: string;
@@ -1022,7 +1075,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     const rawAll: CheckSheetManagementItem[] = (checksheets.data ?? [])
       .filter((s) => s.status === "ISSUED" || s.status === "COMPLETED")
       .map((s) => {
-        // Try to get additional data from allCheckSheets if available
         const mgmtData = allCheckSheets.data?.find((m) => m.id === s.id);
         return {
           id: s.id,
@@ -1042,7 +1094,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         };
       });
 
-    // All items in rawAll are already filtered to be ISSUED or COMPLETED, so we can use them directly
     const withEffective = rawAll;
 
     let result = withEffective;
@@ -1230,7 +1281,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   }, [allAlerts, alertFilter]);
 
   const filteredChecks = useMemo(() => {
-    // Overview should only show upcoming checks, not issued or completed ones
     let checks = allChecks.filter((check) => check.status !== "ISSUED" && check.status !== "COMPLETED");
 
     if (checkFilter !== "ALL") {
@@ -2095,6 +2145,32 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         View All →
                       </button>
                     </div>
+                    <div className="flex items-end justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const params = new URLSearchParams();
+                          if (entriesReportStatusFilter && entriesReportStatusFilter !== "ALL") {
+                            params.set("status", entriesReportStatusFilter);
+                          }
+                          if (entriesReportEquipmentFilter && entriesReportEquipmentFilter !== "ALL") {
+                            params.set("equipmentId", entriesReportEquipmentFilter);
+                          }
+                          if (entriesReportDateFrom) {
+                            params.set("dateFrom", entriesReportDateFrom);
+                          }
+                          if (entriesReportDateTo) {
+                            params.set("dateTo", entriesReportDateTo);
+                          }
+                          const query = params.toString();
+                          const url = apiPath(`/api/entries/export${query ? `?${query}` : ""}`);
+                          window.open(url, "_blank");
+                        }}
+                        className="inline-flex items-center rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg"
+                      >
+                        Export CSV
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
                     {filteredChecks.map((check) => {
@@ -2656,6 +2732,32 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               </button>
                             )}
                           </div>
+                          <div className="flex items-end justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const params = new URLSearchParams();
+                                if (entriesReportStatusFilter && entriesReportStatusFilter !== "ALL") {
+                                  params.set("status", entriesReportStatusFilter);
+                                }
+                                if (entriesReportEquipmentFilter && entriesReportEquipmentFilter !== "ALL") {
+                                  params.set("equipmentId", entriesReportEquipmentFilter);
+                                }
+                                if (entriesReportDateFrom) {
+                                  params.set("dateFrom", entriesReportDateFrom);
+                                }
+                                if (entriesReportDateTo) {
+                                  params.set("dateTo", entriesReportDateTo);
+                                }
+                                const query = params.toString();
+                                const url = apiPath(`/api/entries/export${query ? `?${query}` : ""}`);
+                                window.open(url, "_blank");
+                              }}
+                              className="inline-flex items-center rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg"
+                            >
+                              Export CSV
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <div className="space-y-3 max-h-[600px] overflow-y-auto">
@@ -2942,6 +3044,90 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     <p className="text-sm font-medium text-[var(--color-text-soft)]">Please select an equipment to view the planning calendar</p>
                   </div>
                 )}
+              </Card>
+
+              <Card title="Export Plan">
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-5">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Export Type</label>
+                      <select
+                        value={planExportMode}
+                        onChange={(e) => setPlanExportMode(e.target.value as typeof planExportMode)}
+                        className={inputClass}
+                      >
+                        <option value="equipment">Equipment-wise CSV</option>
+                        <option value="pictorial">Pictorial Report (HTML)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment From</label>
+                      <input
+                        type="text"
+                        value={planExportEquipmentFrom}
+                        onChange={(e) => setPlanExportEquipmentFrom(e.target.value)}
+                        placeholder="e.g. EQ-0001"
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment To</label>
+                      <input
+                        type="text"
+                        value={planExportEquipmentTo}
+                        onChange={(e) => setPlanExportEquipmentTo(e.target.value)}
+                        placeholder="e.g. EQ-0100"
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Due Date From</label>
+                      <input
+                        type="date"
+                        value={planExportDateFrom}
+                        onChange={(e) => setPlanExportDateFrom(e.target.value)}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Due Date To</label>
+                      <input
+                        type="date"
+                        value={planExportDateTo}
+                        onChange={(e) => setPlanExportDateTo(e.target.value)}
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const params = new URLSearchParams();
+                        params.set("mode", planExportMode);
+                        params.set("format", planExportMode === "pictorial" ? "html" : "csv");
+                        if (planExportEquipmentFrom.trim()) {
+                          params.set("equipmentFrom", planExportEquipmentFrom.trim());
+                        }
+                        if (planExportEquipmentTo.trim()) {
+                          params.set("equipmentTo", planExportEquipmentTo.trim());
+                        }
+                        if (planExportDateFrom) {
+                          params.set("dateFrom", planExportDateFrom);
+                        }
+                        if (planExportDateTo) {
+                          params.set("dateTo", planExportDateTo);
+                        }
+                        const query = params.toString();
+                        const url = apiPath(`/api/plan/export${query ? `?${query}` : ""}`);
+                        window.open(url, "_blank");
+                      }}
+                      className="inline-flex items-center rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-sm font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg"
+                    >
+                      Export
+                    </button>
+                  </div>
+                </div>
               </Card>
 
               {selectedEquipmentId && forecastMetrics.data && (
@@ -3905,20 +4091,77 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       </select>
                     </div>
                   </div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <span className="text-xs font-semibold text-[var(--color-text-soft)]">
                       {history.data
                         ? `Showing ${history.data.entries.length} entries, ${history.data.checks.length} checks`
                         : "No data loaded"}
                     </span>
-                    <button
-                      type="button"
-                      onClick={handleExportHistory}
-                      disabled={!history.data}
-                      className="rounded-lg bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Export History (CSV)
-                    </button>
+                    <div className="flex gap-2 flex-wrap">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={historyExportEquipmentFrom}
+                          onChange={(e) => setHistoryExportEquipmentFrom(e.target.value)}
+                          placeholder="Equipment From"
+                          className="h-9 w-32 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        />
+                        <input
+                          type="text"
+                          value={historyExportEquipmentTo}
+                          onChange={(e) => setHistoryExportEquipmentTo(e.target.value)}
+                          placeholder="Equipment To"
+                          className="h-9 w-32 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        />
+                        <input
+                          type="date"
+                          value={historyExportDateFrom}
+                          onChange={(e) => setHistoryExportDateFrom(e.target.value)}
+                          placeholder="Date From"
+                          className="h-9 w-36 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        />
+                        <input
+                          type="date"
+                          value={historyExportDateTo}
+                          onChange={(e) => setHistoryExportDateTo(e.target.value)}
+                          min={historyExportDateFrom || undefined}
+                          placeholder="Date To"
+                          className="h-9 w-36 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const params = new URLSearchParams();
+                          if (historyExportEquipmentFrom.trim()) {
+                            params.set("equipmentFrom", historyExportEquipmentFrom.trim());
+                          }
+                          if (historyExportEquipmentTo.trim()) {
+                            params.set("equipmentTo", historyExportEquipmentTo.trim());
+                          }
+                          if (historyExportDateFrom) {
+                            params.set("dateFrom", historyExportDateFrom);
+                          }
+                          if (historyExportDateTo) {
+                            params.set("dateTo", historyExportDateTo);
+                          }
+                          const query = params.toString();
+                          const url = apiPath(`/api/equipment/history/export${query ? `?${query}` : ""}`);
+                          window.open(url, "_blank");
+                        }}
+                        className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+                      >
+                        Export Equipment Report
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExportHistory}
+                        disabled={!history.data}
+                        className="rounded-lg bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Export History (CSV)
+                      </button>
+                    </div>
                   </div>
                 </div>
                 {historyEquipmentId === null ? (
@@ -4726,7 +4969,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                           name: `${sheet.equipmentNumber} - Check ${sheet.checkCode}`,
                                           onConfirm: () => {
                                             deleteCheckSheetDetail.mutate(
-                                              { equipmentId: sheet.equipmentId, sheetId: sheet.id },
+                                              sheet.id,
                                               {
                                                 onSuccess: () => {
                                                   toast.success("Check sheet deleted successfully");
@@ -5050,6 +5293,44 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       Upload the signed / completed checksheet for reference. This field is optional.
                     </p>
                   </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Technicians (Optional)</label>
+                    <div className="max-h-40 overflow-y-auto rounded-lg border-2 border-[var(--color-surface-strong)] bg-white p-2">
+                      {(technicians.data ?? []).filter((t) => t.isActive).map((t) => (
+                        <label key={t.id} className="flex items-center gap-2 p-2 hover:bg-[var(--color-surface)] rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={completeTechnicianIds.includes(t.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setCompleteTechnicianIds([...completeTechnicianIds, t.id]);
+                              } else {
+                                setCompleteTechnicianIds(completeTechnicianIds.filter((id) => id !== t.id));
+                              }
+                            }}
+                            className="h-4 w-4 accent-[var(--color-primary)]"
+                          />
+                          <span className="text-sm font-medium text-[var(--color-text)]">
+                            {t.name} ({t.staffId}) - {t.designation}
+                          </span>
+                        </label>
+                      ))}
+                      {(technicians.data ?? []).filter((t) => t.isActive).length === 0 && (
+                        <p className="text-xs text-[var(--color-text-soft)] p-2">No active technicians available</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Remarks (Optional)</label>
+                    <textarea
+                      value={completeRemarks}
+                      onChange={(e) => setCompleteRemarks(e.target.value)}
+                      maxLength={1000}
+                      rows={3}
+                      placeholder="Enter any remarks about this check completion..."
+                      className="w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 py-2 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                    />
+                  </div>
                   <div className="flex gap-3 pt-1">
                     <button
                       type="button"
@@ -5062,7 +5343,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         }
                         const dateIso = new Date(`${completeDate}T00:00:00.000Z`).toISOString();
                         updateCheckSheet.mutate(
-                          { id: completeModalCheck.id, action: "complete", date: dateIso, completedHours: hoursValue },
+                          { id: completeModalCheck.id, action: "complete", date: dateIso, completedHours: hoursValue, remarks: completeRemarks || undefined, technicianIds: completeTechnicianIds.length > 0 ? completeTechnicianIds : undefined },
                           {
                             onSuccess: () => {
                               toast.success(
@@ -5070,6 +5351,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               );
                               setCompleteModalCheck(null);
                               setCompleteHours("");
+                              setCompleteRemarks("");
+                              setCompleteTechnicianIds([]);
                             },
                             onError: (error) => {
                               toast.error(error instanceof Error ? error.message : "Failed to complete check");
@@ -5083,7 +5366,11 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setCompleteModalCheck(null)}
+                      onClick={() => {
+                        setCompleteModalCheck(null);
+                        setCompleteRemarks("");
+                        setCompleteTechnicianIds([]);
+                      }}
                       className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
                     >
                       Cancel
@@ -6439,7 +6726,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                       name: `Check ${sheet.checkCode}`,
                                       onConfirm: () => {
                                         deleteCheckSheetDetail.mutate(
-                                          { equipmentId: selectedEquipmentForMgmt!, sheetId: sheet.id },
+                                          sheet.id,
                                           {
                                             onSuccess: () => {
                                               toast.success("Check sheet deleted successfully");
@@ -6890,10 +7177,305 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
             </div>
           )}
 
+          {activeSection === "user-management" && (
+            <div className="space-y-6">
+              <Card title="User Management">
+                {isSuperadmin ? (
+                  <div className="space-y-6">
+                    <form className="space-y-4" onSubmit={onCreateUser}>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Full Name</label>
+                        <input required value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Email</label>
+                        <input required type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Password</label>
+                        <input required type="password" minLength={8} value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className={inputClass} />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Role</label>
+                        <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value as UserRole)} className={inputClass}>
+                          <option value="USER">USER</option>
+                          <option value="ADMIN">ADMIN</option>
+                          <option value="SUPERADMIN">SUPERADMIN</option>
+                        </select>
+                      </div>
+                      <button type="submit" className="w-full rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[var(--color-accent)]/30 transition-all hover:scale-[1.02] hover:shadow-xl">
+                        Create User
+                      </button>
+                    </form>
+
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
+                      <h3 className="mb-4 text-lg font-bold text-[var(--color-text)]">All Users</h3>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {(users.data ?? []).map((u) => (
+                          <div key={u.id} className="flex items-center justify-between rounded-lg border border-[var(--color-surface-strong)] bg-white p-3">
+                            <div>
+                              <p className="font-semibold text-[var(--color-text)]">{u.fullName}</p>
+                              <p className="text-xs text-[var(--color-text-soft)]">{u.email}</p>
+                              <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-bold ${u.role === "SUPERADMIN" ? "bg-purple-100 text-purple-800" : u.role === "ADMIN" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-800"}`}>
+                                {u.role}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Superadmin access required</p>
+                )}
+              </Card>
+            </div>
+          )}
+
+          {activeSection === "permission-management" && (
+            <div className="space-y-6">
+              <Card title="Permission Management">
+                {isSuperadmin ? (
+                  <div className="space-y-6">
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
+                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Permission Matrix</label>
+                      <select
+                        value={permissionUserId}
+                        onChange={(e) => {
+                          setPermissionUserId(e.target.value);
+                          loadPermissionMap(e.target.value);
+                        }}
+                        className={inputClass}
+                      >
+                        <option value="">Select user</option>
+                        {(users.data ?? []).map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.fullName} ({u.role})
+                          </option>
+                        ))}
+                      </select>
+                      {permissionUserId && (
+                        <div className="mt-4 space-y-2">
+                          {(permissionCatalog.data ?? []).map((perm) => (
+                            <label key={perm.key} className="flex items-center justify-between rounded-lg bg-white p-3 border border-[var(--color-surface-strong)] hover:border-[var(--color-primary)]/30 transition-colors">
+                              <span className="text-sm font-semibold text-[var(--color-text)]">{perm.name}</span>
+                              <input
+                                type="checkbox"
+                                checked={Boolean(permissionMap[perm.key])}
+                                onChange={(e) => setPermissionMap((prev) => ({ ...prev, [perm.key]: e.target.checked }))}
+                                className="h-5 w-5 accent-[var(--color-primary)]"
+                              />
+                            </label>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updatePermissions.mutate(
+                                {
+                                  userId: permissionUserId,
+                                  permissions: (permissionCatalog.data ?? []).map((p) => ({ key: p.key, name: p.name, allowed: Boolean(permissionMap[p.key]) })),
+                                },
+                                {
+                                  onSuccess: () => {
+                                    const user = (users.data ?? []).find((u) => u.id === permissionUserId);
+                                    toast.success(`Permissions updated for ${user?.fullName || "user"}`);
+                                  },
+                                  onError: (error) => {
+                                    toast.error(error instanceof Error ? error.message : "Failed to update permissions");
+                                  },
+                                }
+                              )
+                            }
+                            className="mt-4 w-full rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl"
+                          >
+                            Save Permissions
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Superadmin access required</p>
+                )}
+              </Card>
+            </div>
+          )}
+
+          {activeSection === "technician-management" && (
+            <div className="space-y-6">
+              <Card title="Technician Management">
+                {canAdmin ? (
+                  <div className="space-y-6">
+                    <form
+                      className="space-y-4"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (editingTechnicianId) {
+                          updateTechnician.mutate(
+                            {
+                              id: editingTechnicianId,
+                              name: editTechnicianName,
+                              staffId: editTechnicianStaffId,
+                              designation: editTechnicianDesignation,
+                              isActive: editTechnicianIsActive,
+                            },
+                            {
+                              onSuccess: () => {
+                                toast.success("Technician updated successfully");
+                                setEditingTechnicianId(null);
+                                setEditTechnicianName("");
+                                setEditTechnicianStaffId("");
+                                setEditTechnicianDesignation("");
+                                setEditTechnicianIsActive(true);
+                              },
+                              onError: (error) => {
+                                toast.error(error instanceof Error ? error.message : "Failed to update technician");
+                              },
+                            }
+                          );
+                        } else {
+                          createTechnician.mutate(
+                            {
+                              name: newTechnicianName,
+                              staffId: newTechnicianStaffId,
+                              designation: newTechnicianDesignation,
+                            },
+                            {
+                              onSuccess: () => {
+                                toast.success("Technician created successfully");
+                                setNewTechnicianName("");
+                                setNewTechnicianStaffId("");
+                                setNewTechnicianDesignation("");
+                              },
+                              onError: (error) => {
+                                toast.error(error instanceof Error ? error.message : "Failed to create technician");
+                              },
+                            }
+                          );
+                        }
+                      }}
+                    >
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Name</label>
+                        <input
+                          required
+                          value={editingTechnicianId ? editTechnicianName : newTechnicianName}
+                          onChange={(e) => (editingTechnicianId ? setEditTechnicianName(e.target.value) : setNewTechnicianName(e.target.value))}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Staff ID</label>
+                        <input
+                          required
+                          value={editingTechnicianId ? editTechnicianStaffId : newTechnicianStaffId}
+                          onChange={(e) => (editingTechnicianId ? setEditTechnicianStaffId(e.target.value) : setNewTechnicianStaffId(e.target.value))}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Designation</label>
+                        <input
+                          required
+                          value={editingTechnicianId ? editTechnicianDesignation : newTechnicianDesignation}
+                          onChange={(e) => (editingTechnicianId ? setEditTechnicianDesignation(e.target.value) : setNewTechnicianDesignation(e.target.value))}
+                          className={inputClass}
+                        />
+                      </div>
+                      {editingTechnicianId && (
+                        <div>
+                          <label className="mb-2 flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={editTechnicianIsActive}
+                              onChange={(e) => setEditTechnicianIsActive(e.target.checked)}
+                              className="h-5 w-5 accent-[var(--color-primary)]"
+                            />
+                            <span className="text-sm font-bold text-[var(--color-text)]">Active</span>
+                          </label>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <button type="submit" className="flex-1 rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl">
+                          {editingTechnicianId ? "Update Technician" : "Create Technician"}
+                        </button>
+                        {editingTechnicianId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTechnicianId(null);
+                              setEditTechnicianName("");
+                              setEditTechnicianStaffId("");
+                              setEditTechnicianDesignation("");
+                              setEditTechnicianIsActive(true);
+                            }}
+                            className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 py-3.5 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    </form>
+
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
+                      <h3 className="mb-4 text-lg font-bold text-[var(--color-text)]">All Technicians</h3>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {(technicians.data ?? []).map((t) => (
+                          <div key={t.id} className="flex items-center justify-between rounded-lg border border-[var(--color-surface-strong)] bg-white p-3">
+                            <div className="flex-1">
+                              <p className="font-semibold text-[var(--color-text)]">{t.name}</p>
+                              <p className="text-xs text-[var(--color-text-soft)]">Staff ID: {t.staffId}</p>
+                              <p className="text-xs text-[var(--color-text-soft)]">Designation: {t.designation}</p>
+                              {!t.isActive && <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-800">Inactive</span>}
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingTechnicianId(t.id);
+                                  setEditTechnicianName(t.name);
+                                  setEditTechnicianStaffId(t.staffId);
+                                  setEditTechnicianDesignation(t.designation);
+                                  setEditTechnicianIsActive(t.isActive);
+                                }}
+                                className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-bold text-white transition-all hover:bg-blue-600"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm(`Are you sure you want to delete ${t.name}?`)) {
+                                    deleteTechnician.mutate(t.id, {
+                                      onSuccess: () => {
+                                        toast.success("Technician deleted successfully");
+                                      },
+                                      onError: (error) => {
+                                        toast.error(error instanceof Error ? error.message : "Failed to delete technician");
+                                      },
+                                    });
+                                  }
+                                }}
+                                className="rounded-lg bg-red-500 px-3 py-1.5 text-xs font-bold text-white transition-all hover:bg-red-600"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Admin access required</p>
+                )}
+              </Card>
+            </div>
+          )}
+
           {activeSection === "admin" && (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                <Card title="Equipment Configuration">
+              <Card title="Equipment Configuration">
                 {canAdmin ? (
                   <form className="space-y-4" onSubmit={onCreateEquipment}>
                     <div>
@@ -7061,97 +7643,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                 )}
               </Card>
 
-              <Card title="User Management">
-                {isSuperadmin ? (
-                  <div className="space-y-6">
-                    <form className="space-y-4" onSubmit={onCreateUser}>
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Full Name</label>
-                        <input required value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className={inputClass} />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Email</label>
-                        <input required type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className={inputClass} />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Password</label>
-                        <input required type="password" minLength={8} value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className={inputClass} />
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Role</label>
-                        <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value as UserRole)} className={inputClass}>
-                          <option value="USER">USER</option>
-                          <option value="ADMIN">ADMIN</option>
-                          <option value="SUPERADMIN">SUPERADMIN</option>
-                        </select>
-                      </div>
-                      <button type="submit" className="w-full rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[var(--color-accent)]/30 transition-all hover:scale-[1.02] hover:shadow-xl">
-                        Create User
-                      </button>
-                    </form>
-
-                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
-                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Permission Matrix</label>
-                      <select
-                        value={permissionUserId}
-                        onChange={(e) => {
-                          setPermissionUserId(e.target.value);
-                          loadPermissionMap(e.target.value);
-                        }}
-                        className={inputClass}
-                      >
-                        <option value="">Select user</option>
-                        {(users.data ?? []).map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.fullName} ({u.role})
-                          </option>
-                        ))}
-                      </select>
-                      {permissionUserId && (
-                        <div className="mt-4 space-y-2">
-                          {catalog.map((perm) => (
-                            <label key={perm.key} className="flex items-center justify-between rounded-lg bg-white p-3 border border-[var(--color-surface-strong)] hover:border-[var(--color-primary)]/30 transition-colors">
-                              <span className="text-sm font-semibold text-[var(--color-text)]">{perm.name}</span>
-                              <input
-                                type="checkbox"
-                                checked={Boolean(permissionMap[perm.key])}
-                                onChange={(e) => setPermissionMap((prev) => ({ ...prev, [perm.key]: e.target.checked }))}
-                                className="h-5 w-5 accent-[var(--color-primary)]"
-                              />
-                            </label>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              updatePermissions.mutate(
-                                {
-                                  userId: permissionUserId,
-                                  permissions: catalog.map((p) => ({ key: p.key, name: p.name, allowed: Boolean(permissionMap[p.key]) })),
-                                },
-                                {
-                                  onSuccess: () => {
-                                    const user = (users.data ?? []).find((u) => u.id === permissionUserId);
-                                    toast.success(`Permissions updated for ${user?.fullName || "user"}`);
-                                  },
-                                  onError: (error) => {
-                                    toast.error(error instanceof Error ? error.message : "Failed to update permissions");
-                                  },
-                                }
-                              )
-                            }
-                            className="mt-4 w-full rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl"
-                          >
-                            Save Permissions
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Superadmin access required</p>
-                )}
-              </Card>
-
               <Card title="System Configuration">
                 {canAdmin ? (
                   <div className="space-y-6">
@@ -7197,6 +7688,194 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           Current value: {systemConfig.data.reminderHoursBefore} hours
                         </p>
                       )}
+                    </div>
+
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
+                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Email Notifications</label>
+                      <p className="mb-3 text-xs text-[var(--color-text-soft)]">
+                        Configure SMTP settings, recipients, and templates for email notifications when checks are issued and before they are due.
+                      </p>
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-[var(--color-text-soft)]">Enable Email Notifications</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateSystemConfig.mutate(
+                                { emailEnabled: !emailEnabled },
+                                {
+                                  onSuccess: () => {
+                                    setEmailEnabled((prev) => !prev);
+                                    toast.success("Email notification toggle updated");
+                                  },
+                                  onError: (error) => {
+                                    toast.error(error instanceof Error ? error.message : "Failed to update email toggle");
+                                  },
+                                }
+                              )
+                            }
+                            className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                              emailEnabled ? "bg-[var(--color-primary)]" : "bg-gray-300"
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+                                emailEnabled ? "translate-x-5" : "translate-x-1"
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">SMTP Host</label>
+                            <input
+                              type="text"
+                              value={emailSmtpHost}
+                              onChange={(e) => setEmailSmtpHost(e.target.value)}
+                              className={inputClass}
+                              placeholder="smtp.example.com"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">SMTP Port</label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={65535}
+                              value={emailSmtpPort}
+                              onChange={(e) => setEmailSmtpPort(e.target.value)}
+                              className={inputClass}
+                              placeholder="587"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">SMTP Username</label>
+                            <input
+                              type="text"
+                              value={emailSmtpUsername}
+                              onChange={(e) => setEmailSmtpUsername(e.target.value)}
+                              className={inputClass}
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">SMTP Password</label>
+                            <input
+                              type="password"
+                              value={emailSmtpPassword}
+                              onChange={(e) => setEmailSmtpPassword(e.target.value)}
+                              className={inputClass}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Recipients (To)</label>
+                          <input
+                            type="text"
+                            value={emailRecipients}
+                            onChange={(e) => setEmailRecipients(e.target.value)}
+                            className={inputClass}
+                            placeholder="user1@example.com, user2@example.com"
+                          />
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Use commas or semicolons to separate multiple addresses.</p>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">CC Recipients</label>
+                          <input
+                            type="text"
+                            value={emailCcs}
+                            onChange={(e) => setEmailCcs(e.target.value)}
+                            className={inputClass}
+                            placeholder="cc1@example.com, cc2@example.com"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Email Subject Template</label>
+                          <input
+                            type="text"
+                            value={emailTemplateSubject}
+                            onChange={(e) => setEmailTemplateSubject(e.target.value)}
+                            className={inputClass}
+                            placeholder="Maintenance Check {{type}} for {{equipmentNumber}} (Check {{checkCode}})"
+                          />
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">
+                            {`Available placeholders: {{type}}, {{equipmentNumber}}, {{equipmentName}}, {{checkCode}}.`}
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Email Body Template</label>
+                          <textarea
+                            rows={6}
+                            value={emailTemplateBody}
+                            onChange={(e) => setEmailTemplateBody(e.target.value)}
+                            className={`${inputClass} min-h-[140px]`}
+                            placeholder={`Dear Team,
+
+A maintenance check has been {{type}}.
+
+Equipment: {{equipmentNumber}} - {{equipmentName}}
+Check Code: {{checkCode}}
+Due Date: {{dueDate}}
+Due Hours: {{dueHours}} {{usageUnit}}
+Status: {{status}}`}
+                          />
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">
+                            {`Available placeholders: {{type}}, {{equipmentNumber}}, {{equipmentName}}, {{checkCode}}, {{dueDate}}, {{dueHours}}, {{usageUnit}}, {{status}}.`}
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Reminder Days Before Due Date</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={365}
+                            value={emailReminderDaysBefore}
+                            onChange={(e) => setEmailReminderDaysBefore(e.target.value)}
+                            className={inputClass}
+                            placeholder="3"
+                          />
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">
+                            Number of days before the due date when reminder emails should be sent.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateSystemConfig.mutate(
+                              {
+                                emailEnabled,
+                                emailSmtpHost,
+                                emailSmtpPort: Number(emailSmtpPort),
+                                emailSmtpUsername,
+                                emailSmtpPassword,
+                                emailRecipients,
+                                emailCcs,
+                                emailTemplateSubject,
+                                emailTemplateBody,
+                                emailReminderDaysBefore: Number(emailReminderDaysBefore),
+                              },
+                              {
+                                onSuccess: () => {
+                                  toast.success("Email configuration updated successfully");
+                                },
+                                onError: (error) => {
+                                  toast.error(error instanceof Error ? error.message : "Failed to update email configuration");
+                                },
+                              }
+                            )
+                          }
+                          disabled={systemConfig.isLoading}
+                          className="mt-2 w-full rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {systemConfig.isLoading ? "Saving..." : "Save Email Settings"}
+                        </button>
+                      </div>
                     </div>
 
                     <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
@@ -7292,12 +7971,53 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         </div>
                       )}
                     </div>
+
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
+                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Section Code</label>
+                      <p className="mb-3 text-xs text-[var(--color-text-soft)]">
+                        Configure the section code used in equipment history report forms (e.g., GrSD/SECTION/EQUIPMENT).
+                      </p>
+                      <div className="flex gap-3">
+                        <input
+                          type="text"
+                          maxLength={50}
+                          value={sectionCode}
+                          onChange={(e) => setSectionCode(e.target.value)}
+                          className="h-12 flex-1 rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 text-sm font-medium outline-none transition-all focus:border-[var(--color-primary)] focus:ring-4 focus:ring-[var(--color-primary)]/20 shadow-sm"
+                          placeholder="Enter section code"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateSystemConfig.mutate(
+                              { sectionCode },
+                              {
+                                onSuccess: () => {
+                                  toast.success("Section code updated successfully");
+                                },
+                                onError: (error) => {
+                                  toast.error(error instanceof Error ? error.message : "Failed to update section code");
+                                },
+                              }
+                            )
+                          }
+                          disabled={systemConfig.isLoading}
+                          className="rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {systemConfig.isLoading ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                      {systemConfig.data && (
+                        <p className="mt-2 text-xs font-medium text-[var(--color-text-soft)]">
+                          Current value: {(systemConfig.data as any).sectionCode || "(not set)"}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Admin access required</p>
                 )}
               </Card>
-              </div>
             </div>
           )}
         </main>

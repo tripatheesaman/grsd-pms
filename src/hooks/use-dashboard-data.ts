@@ -267,6 +267,17 @@ type SystemConfig = {
   approachingOffsetHours: number;
   issueOffsetHours: number;
   nearOffsetHours: number;
+  sectionCode?: string;
+  emailEnabled: boolean;
+  emailSmtpHost: string;
+  emailSmtpPort: number;
+  emailSmtpUsername: string;
+  emailSmtpPassword: string;
+  emailRecipients: string;
+  emailCcs: string;
+  emailTemplateSubject: string;
+  emailTemplateBody: string;
+  emailReminderDaysBefore: number;
 };
 
 export function useSystemConfig() {
@@ -284,6 +295,17 @@ export function useUpdateSystemConfig() {
       approachingOffsetHours?: number;
       issueOffsetHours?: number;
       nearOffsetHours?: number;
+      sectionCode?: string;
+      emailEnabled?: boolean;
+      emailSmtpHost?: string;
+      emailSmtpPort?: number;
+      emailSmtpUsername?: string;
+      emailSmtpPassword?: string;
+      emailRecipients?: string;
+      emailCcs?: string;
+      emailTemplateSubject?: string;
+      emailTemplateBody?: string;
+      emailReminderDaysBefore?: number;
     }) =>
       apiPatch<SystemConfig>("/api/config", data),
     onSuccess: () => {
@@ -479,11 +501,13 @@ export function useCreateEntry() {
 export function useUpdateCheckSheet() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { id: string; action: "issue" | "complete"; date: string; completedHours?: number }) =>
+    mutationFn: (payload: { id: string; action: "issue" | "complete"; date: string; completedHours?: number; remarks?: string; technicianIds?: string[] }) =>
       apiPatch<{ id: string; status: string }>(`/api/checksheets/${payload.id}`, {
         action: payload.action,
         date: payload.date,
         completedHours: payload.completedHours,
+        remarks: payload.remarks,
+        technicianIds: payload.technicianIds,
       }),
     onSuccess: (data) => {
       queryClient.setQueryData<CheckSheetItem[] | undefined>(["checksheets"], (old) => {
@@ -911,11 +935,57 @@ export function useUpdateCheckSheetDetail() {
 export function useDeleteCheckSheetDetail() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { equipmentId: string; sheetId: string }) =>
-      apiDelete<{ id: string }>(`/api/equipment/${payload.equipmentId}/check-sheets/${payload.sheetId}`),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["equipment", "detail", variables.equipmentId] });
+    mutationFn: (checkSheetId: string) => apiDelete(`/api/checksheets/${checkSheetId}/detail`),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["checksheets"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
+    },
+  });
+}
+
+export type Technician = {
+  id: string;
+  name: string;
+  staffId: string;
+  designation: string;
+  isActive: boolean;
+};
+
+export function useTechnicians() {
+  return useQuery({
+    queryKey: ["technicians"],
+    queryFn: () => apiGet<Technician[]>("/api/technicians"),
+  });
+}
+
+export function useCreateTechnician() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { name: string; staffId: string; designation: string }) =>
+      apiPost<Technician>("/api/technicians", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["technicians"] });
+    },
+  });
+}
+
+export function useUpdateTechnician() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { id: string; name?: string; staffId?: string; designation?: string; isActive?: boolean }) =>
+      apiPatch<Technician>("/api/technicians", payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["technicians"] });
+    },
+  });
+}
+
+export function useDeleteTechnician() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (technicianId: string) => apiDelete(`/api/technicians/${technicianId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["technicians"] });
     },
   });
 }

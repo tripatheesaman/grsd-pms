@@ -109,7 +109,6 @@ export async function GET(_: Request, context: RouteContext) {
   }
 
   try {
-    // pdfFilePath is stored as a relative path under the uploads root, e.g. "checksheets/<file>.pdf"
     const relative = checkSheet.pdfFilePath.replace(/^\/+/, "");
     const filePath = buildUploadPath(...relative.split("/"));
     const fileBuffer = await readFile(filePath);

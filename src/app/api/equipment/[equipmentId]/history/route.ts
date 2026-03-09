@@ -89,6 +89,17 @@ export async function GET(request: Request, context: RouteContext) {
     }),
     prisma.checkSheet.findMany({
       where: checkWhere,
+      include: {
+        completedByTechnicians: {
+          include: {
+            technician: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { dueDate: "asc" },
     }),
     (prisma as any).groundingPeriod.findMany({
@@ -125,6 +136,8 @@ export async function GET(request: Request, context: RouteContext) {
       pdfFilePath = `${UPLOADS_BASE_URL}/${relative.startsWith("checksheets/") ? relative : `checksheets/${relative}`}`;
     }
 
+    const technicianNames = sheet.completedByTechnicians?.map((ct: any) => ct.technician.name).filter(Boolean) || [];
+
     return {
       id: sheet.id,
       checkCode: sheet.checkCode,
@@ -137,6 +150,7 @@ export async function GET(request: Request, context: RouteContext) {
       completedHours: sheet.completedHours !== null ? Number(sheet.completedHours) : null,
       pdfFilePath,
       isMissed,
+      technicianNames,
     };
   });
 
