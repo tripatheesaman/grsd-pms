@@ -16,6 +16,8 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
   const equipmentId = searchParams.get("equipmentId");
+  const equipmentFrom = searchParams.get("equipmentFrom")?.trim() || "";
+  const equipmentTo = searchParams.get("equipmentTo")?.trim() || "";
   const dateFrom = searchParams.get("dateFrom");
   const dateTo = searchParams.get("dateTo");
 
@@ -27,6 +29,17 @@ export async function GET(request: Request) {
 
   if (equipmentId) {
     where.equipmentId = equipmentId;
+  }
+
+  if (equipmentFrom || equipmentTo) {
+    where.equipment = {
+      is: {
+        equipmentNumber: {
+          ...(equipmentFrom ? { gte: equipmentFrom } : {}),
+          ...(equipmentTo ? { lte: equipmentTo } : {}),
+        },
+      },
+    };
   }
 
   if (dateFrom || dateTo) {

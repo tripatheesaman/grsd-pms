@@ -270,6 +270,7 @@ type SystemConfig = {
   sectionCode?: string;
   emailEnabled: boolean;
   emailSendOnIssue: boolean;
+  emailAttachChecksheet: boolean;
   emailSmtpHost: string;
   emailSmtpPort: number;
   emailSmtpUsername: string;
@@ -299,6 +300,7 @@ export function useUpdateSystemConfig() {
       sectionCode?: string;
       emailEnabled?: boolean;
       emailSendOnIssue?: boolean;
+      emailAttachChecksheet?: boolean;
       emailSmtpHost?: string;
       emailSmtpPort?: number;
       emailSmtpUsername?: string;
@@ -383,12 +385,16 @@ export type AllEntryItem = PendingEntryItem & {
 export function useAllEntries(filters?: {
   status?: string;
   equipmentId?: string;
+  equipmentFrom?: string;
+  equipmentTo?: string;
   dateFrom?: string;
   dateTo?: string;
 }) {
   const queryParams = new URLSearchParams();
   if (filters?.status) queryParams.set("status", filters.status);
   if (filters?.equipmentId) queryParams.set("equipmentId", filters.equipmentId);
+   if (filters?.equipmentFrom) queryParams.set("equipmentFrom", filters.equipmentFrom);
+   if (filters?.equipmentTo) queryParams.set("equipmentTo", filters.equipmentTo);
   if (filters?.dateFrom) queryParams.set("dateFrom", filters.dateFrom);
   if (filters?.dateTo) queryParams.set("dateTo", filters.dateTo);
 

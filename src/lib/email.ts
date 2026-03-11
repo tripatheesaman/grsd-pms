@@ -1,10 +1,13 @@
 import nodemailer from "nodemailer";
+import { readFile } from "fs/promises";
 import { prisma } from "@/lib/prisma";
 import { CheckSheet, Equipment } from "@prisma/client";
+import { buildUploadPath } from "@/lib/uploads";
 
 type EmailConfig = {
   enabled: boolean;
   sendOnIssue: boolean;
+  attachCheckPdf: boolean;
   host: string | null;
   port: number | null;
   username: string | null;
@@ -19,6 +22,7 @@ type EmailConfig = {
 const CONFIG_KEYS = [
   "email_enabled",
   "email_send_on_issue",
+  "email_attach_checksheet",
   "email_smtp_host",
   "email_smtp_port",
   "email_smtp_username",
@@ -44,6 +48,7 @@ async function loadEmailConfig(): Promise<EmailConfig> {
 
   const enabled = map["email_enabled"] === "true";
   const sendOnIssue = map["email_send_on_issue"] !== "false"; // default true
+  const attachCheckPdf = map["email_attach_checksheet"] === "true";
   const host = map["email_smtp_host"] ?? null;
   const port = map["email_smtp_port"] ? Number(map["email_smtp_port"]) : null;
   const username = map["email_smtp_username"] ?? null;
@@ -84,6 +89,7 @@ async function loadEmailConfig(): Promise<EmailConfig> {
   return {
     enabled,
     sendOnIssue,
+    attachCheckPdf,
     host,
     port,
     username,
@@ -154,12 +160,33 @@ export async function sendCheckEmail(context: EmailContext) {
   const subject = applyTemplate(config.templateSubject, data);
   const body = applyTemplate(config.templateBody, data);
 
+  let attachments: { filename: string; content: Buffer }[] | undefined;
+
+  if (
+    context.type === "issued" &&
+    config.attachCheckPdf &&
+    check.pdfFilePath &&
+    typeof check.pdfFilePath === "string"
+  ) {
+    try {
+      const relative = check.pdfFilePath.replace(/^\/+/, "");
+      const filePath = buildUploadPath(...relative.split("/"));
+      const fileBuffer = await readFile(filePath);
+      const filename = relative.split("/").pop() || "checksheet.pdf";
+      attachments = [{ filename, content: fileBuffer }];
+    } catch {
+      // If attachment fails (missing file, etc.), still send email without attachment.
+      attachments = undefined;
+    }
+  }
+
   await transport.sendMail({
     from: config.username || undefined,
     to: config.recipients.join(", "),
     cc: config.ccs.length ? config.ccs.join(", ") : undefined,
     subject,
     text: body,
+    attachments,
   });
 }
 
