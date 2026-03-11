@@ -827,6 +827,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       setSectionCode((systemConfig.data as any).sectionCode || "");
       setEmailEnabled(systemConfig.data.emailEnabled);
       setEmailSendOnIssue((systemConfig.data as any).emailSendOnIssue ?? true);
+      setEmailAttachChecksheet((systemConfig.data as any).emailAttachChecksheet ?? false);
       setEmailSmtpHost(systemConfig.data.emailSmtpHost || "");
       setEmailSmtpPort(String(systemConfig.data.emailSmtpPort ?? 587));
       setEmailSmtpUsername(systemConfig.data.emailSmtpUsername || "");
@@ -922,6 +923,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [sectionCode, setSectionCode] = useState("");
   const [emailEnabled, setEmailEnabled] = useState(false);
   const [emailSendOnIssue, setEmailSendOnIssue] = useState(true);
+  const [emailAttachChecksheet, setEmailAttachChecksheet] = useState(false);
   const [emailSmtpHost, setEmailSmtpHost] = useState("");
   const [emailSmtpPort, setEmailSmtpPort] = useState("587");
   const [emailSmtpUsername, setEmailSmtpUsername] = useState("");
@@ -1021,6 +1023,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [selectedAllChecksSheet, setSelectedAllChecksSheet] = useState<CheckSheetManagementItem | null>(null);
   const [entriesReportStatusFilter, setEntriesReportStatusFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [entriesReportEquipmentFilter, setEntriesReportEquipmentFilter] = useState("ALL");
+  const [entriesReportEquipmentFrom, setEntriesReportEquipmentFrom] = useState("");
+  const [entriesReportEquipmentTo, setEntriesReportEquipmentTo] = useState("");
   const [entriesReportDateFrom, setEntriesReportDateFrom] = useState("");
   const [entriesReportDateTo, setEntriesReportDateTo] = useState("");
   const [entriesReportSearch, setEntriesReportSearch] = useState("");
@@ -1075,6 +1079,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const allEntries = useAllEntries({
     status: entriesReportStatusFilter !== "ALL" ? entriesReportStatusFilter : undefined,
     equipmentId: entriesReportEquipmentFilter !== "ALL" ? entriesReportEquipmentFilter : undefined,
+    equipmentFrom: entriesReportEquipmentFrom || undefined,
+    equipmentTo: entriesReportEquipmentTo || undefined,
     dateFrom: entriesReportDateFrom || undefined,
     dateTo: entriesReportDateTo || undefined,
   });
@@ -1271,7 +1277,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const bulkEquipmentList = useMemo(
     () =>
       [...equipmentOptions].sort((a, b) =>
-        a.equipmentNumber.localeCompare(b.equipmentNumber),
+        equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber),
       ),
     [equipmentOptions],
   );
@@ -2645,7 +2651,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                   ) : (
                     <>
                       <div className="mb-4 space-y-4">
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
                           <div>
                             <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Search</label>
                             <input
@@ -2677,15 +2683,40 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                             >
                               <option value="ALL">All Equipment</option>
-                              {Array.from(new Set((allEntries.data ?? []).map((e) => e.equipmentId))).map((equipmentId) => {
-                                const entry = allEntries.data?.find((e) => e.equipmentId === equipmentId);
-                                return entry ? (
-                                  <option key={equipmentId} value={equipmentId}>
+                              {Array.from(
+                                new Map(
+                                  (allEntries.data ?? []).map((e) => [e.equipmentId, e]),
+                                ).values(),
+                              )
+                                .sort((a, b) =>
+                                  equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber),
+                                )
+                                .map((entry) => (
+                                  <option key={entry.equipmentId} value={entry.equipmentId}>
                                     {entry.equipmentNumber} - {entry.equipmentName}
                                   </option>
-                                ) : null;
-                              })}
+                                ))}
                             </select>
+                          </div>
+                          <div>
+                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment From</label>
+                            <input
+                              type="text"
+                              value={entriesReportEquipmentFrom}
+                              onChange={(e) => setEntriesReportEquipmentFrom(e.target.value)}
+                              placeholder="e.g. 1001"
+                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment To</label>
+                            <input
+                              type="text"
+                              value={entriesReportEquipmentTo}
+                              onChange={(e) => setEntriesReportEquipmentTo(e.target.value)}
+                              placeholder="e.g. 1010"
+                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                            />
                           </div>
                           <div>
                             <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Date From</label>
@@ -2723,13 +2754,21 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                 return filtered.length;
                               })()} of {allEntries.data?.length ?? 0} entries
                             </span>
-                            {(entriesReportSearch || entriesReportStatusFilter !== "ALL" || entriesReportEquipmentFilter !== "ALL" || entriesReportDateFrom || entriesReportDateTo) && (
+                            {(entriesReportSearch ||
+                              entriesReportStatusFilter !== "ALL" ||
+                              entriesReportEquipmentFilter !== "ALL" ||
+                              entriesReportEquipmentFrom ||
+                              entriesReportEquipmentTo ||
+                              entriesReportDateFrom ||
+                              entriesReportDateTo) && (
                               <button
                                 type="button"
                                 onClick={() => {
                                   setEntriesReportSearch("");
                                   setEntriesReportStatusFilter("ALL");
                                   setEntriesReportEquipmentFilter("ALL");
+                                  setEntriesReportEquipmentFrom("");
+                                  setEntriesReportEquipmentTo("");
                                   setEntriesReportDateFrom("");
                                   setEntriesReportDateTo("");
                                 }}
@@ -2749,6 +2788,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                 }
                                 if (entriesReportEquipmentFilter && entriesReportEquipmentFilter !== "ALL") {
                                   params.set("equipmentId", entriesReportEquipmentFilter);
+                                }
+                                if (entriesReportEquipmentFrom.trim()) {
+                                  params.set("equipmentFrom", entriesReportEquipmentFrom.trim());
+                                }
+                                if (entriesReportEquipmentTo.trim()) {
+                                  params.set("equipmentTo", entriesReportEquipmentTo.trim());
                                 }
                                 if (entriesReportDateFrom) {
                                   params.set("dateFrom", entriesReportDateFrom);
@@ -2777,6 +2822,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               }
                             }
                             return true;
+                          });
+
+                          filtered.sort((a, b) => {
+                            const cmp = equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber);
+                            if (cmp !== 0) return cmp;
+                            return new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime();
                           });
 
                           return filtered.length === 0 ? (
@@ -2948,23 +2999,51 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                 <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div>
                     <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Equipment</label>
-                    <select
-                      value={selectedEquipmentId ?? ""}
-                      onChange={(e) => {
-                        setSelectedEquipmentId(e.target.value || null);
-                        setCurrentMonth(new Date().getMonth());
-                        setCurrentWeek(new Date());
-                        setCurrentDay(new Date());
-                      }}
-                      className={inputClass}
-                    >
-                      <option value="">Select equipment</option>
-                      {equipmentOptions.map((eq) => (
-                        <option key={eq.id} value={eq.id}>
-                          {eq.equipmentNumber} - {eq.displayName}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={
+                          selectedEquipmentId
+                            ? equipmentOptions.find((e) => e.id === selectedEquipmentId)?.equipmentNumber || ""
+                            : equipmentSearch
+                        }
+                        onChange={(e) => {
+                          setEquipmentSearch(e.target.value);
+                          setEquipmentSearchOpen(true);
+                          setSelectedEquipmentId(null);
+                          setEquipmentSearchIndex(-1);
+                          setEquipmentError(undefined);
+                        }}
+                        onFocus={() => setEquipmentSearchOpen(true)}
+                        onKeyDown={handleEquipmentKeyDown}
+                        className={inputClass}
+                        placeholder="Type to search equipment..."
+                        autoComplete="off"
+                      />
+                      {equipmentSearchOpen && filteredEquipment.length > 0 && (
+                        <div className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-xl border-2 border-[var(--color-surface-strong)] bg-white shadow-2xl">
+                          {filteredEquipment.map((eq, index) => (
+                            <button
+                              key={eq.id}
+                              type="button"
+                              onClick={() => handleEquipmentSelect(eq.id)}
+                              className={`w-full px-4 py-2 text-left text-xs ${
+                                index === equipmentSearchIndex
+                                  ? "bg-gradient-to-r from-[var(--color-primary)]/20 to-[var(--color-primary)]/10"
+                                  : "hover:bg-gradient-to-r hover:from-[var(--color-primary)]/10 hover:to-transparent"
+                              }`}
+                            >
+                              <span className="font-bold text-[var(--color-text)]">
+                                {eq.equipmentNumber}
+                              </span>
+                              <span className="ml-2 text-[var(--color-text-soft)]">
+                                {eq.displayName}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Year</label>
@@ -4454,22 +4533,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                   <Card title="Equipment Management">
                     <div className="mb-4 space-y-4">
                       <div className="flex items-center justify-between flex-wrap gap-4">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowEquipmentCreateModal(true);
-                            setEquipmentNumber("");
-                            setEquipmentDisplayName("");
-                            setAvgHours("8");
-                            setCurrentHours("0");
-                            setCheckRules([{ code: "A", intervalHours: "500" }]);
-                            setPreviousCheckCode("");
-                            setPreviousCheckDate("");
-                          }}
-                          className="rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2.5 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl"
-                        >
-                          + Add Equipment
-                        </button>
                         <div className="flex items-center gap-2 flex-wrap">
                           <input
                             type="text"
@@ -5445,163 +5508,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         setCompleteModalCheck(null);
                         setCompleteRemarks("");
                         setCompleteTechnicianIds([]);
-                      }}
-                      className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {showEquipmentCreateModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowEquipmentCreateModal(false)}>
-              <div className="relative w-full max-w-2xl rounded-2xl bg-gradient-to-br from-white to-[var(--color-surface)] shadow-2xl p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                <h3 className="text-lg font-bold text-[var(--color-text)] mb-4">Create New Equipment</h3>
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment Number *</label>
-                      <input
-                        type="text"
-                        value={equipmentNumber}
-                        onChange={(e) => setEquipmentNumber(e.target.value)}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                        placeholder="e.g., 1001"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Display Name *</label>
-                      <input
-                        type="text"
-                        value={equipmentDisplayName}
-                        onChange={(e) => setEquipmentDisplayName(e.target.value)}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                        placeholder="Equipment name"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Average Hours/Day *</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={avgHours}
-                        onChange={(e) => setAvgHours(e.target.value)}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Current Hours *</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={currentHours}
-                        onChange={(e) => setCurrentHours(e.target.value)}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Usage Unit</label>
-                      <select
-                        value={createUsageUnit}
-                        onChange={(e) => setCreateUsageUnit(e.target.value as "HOURS" | "KM")}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                      >
-                        <option value="HOURS">Hours (Hour Meter)</option>
-                        <option value="KM">Kilometers</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Check Rules *</label>
-                    <div className="space-y-2">
-                      {checkRules.map((rule, index) => (
-                        <div key={index} className="flex gap-2 items-center">
-                          <input
-                            type="text"
-                            value={rule.code}
-                            onChange={(e) => updateCheckRule(index, "code", e.target.value)}
-                            maxLength={1}
-                            className="h-10 w-16 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20 text-center"
-                            placeholder="A"
-                          />
-                          <input
-                            type="number"
-                            step="1"
-                            min="1"
-                            value={rule.intervalHours}
-                            onChange={(e) => updateCheckRule(index, "intervalHours", e.target.value)}
-                            className="flex-1 h-10 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            placeholder="Interval hours"
-                          />
-                          {checkRules.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeCheckRule(index)}
-                              className="h-10 w-10 rounded-lg border-2 border-red-500 bg-white text-red-500 font-bold hover:bg-red-500 hover:text-white transition-all"
-                            >
-                              ×
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={addCheckRule}
-                        className="w-full rounded-lg border-2 border-dashed border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5 px-4 py-2 text-sm font-semibold text-[var(--color-primary)] hover:border-[var(--color-primary)]/50 hover:bg-[var(--color-primary)]/10 transition-all"
-                      >
-                        + Add Check Rule
-                      </button>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Previous Check Code (Optional)</label>
-                      <input
-                        type="text"
-                        value={previousCheckCode}
-                        onChange={(e) => setPreviousCheckCode(e.target.value.toUpperCase().slice(0, 1))}
-                        maxLength={1}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                        placeholder="A"
-                      />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Previous Check Date (Optional)</label>
-                      <input
-                        type="date"
-                        value={previousCheckDate}
-                        onChange={(e) => setPreviousCheckDate(e.target.value)}
-                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={() => onCreateEquipment()}
-                      disabled={createEquipment.isPending || !equipmentNumber || !avgHours || !currentHours || checkRules.length === 0 || checkRules.some(r => !r.code || !r.intervalHours || Number(r.intervalHours) <= 0)}
-                      className="flex-1 rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {createEquipment.isPending ? "Creating..." : "Create Equipment"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowEquipmentCreateModal(false);
-                        setEquipmentNumber("");
-                        setEquipmentDisplayName("");
-                        setAvgHours("8");
-                        setCurrentHours("0");
-                        setCheckRules([{ code: "A", intervalHours: "500" }]);
-                        setPreviousCheckCode("");
-                        setPreviousCheckDate("");
                       }}
                       className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
                     >
@@ -7803,6 +7709,43 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
                         <div className="flex items-center justify-between gap-3">
                           <span className="text-xs font-semibold text-[var(--color-text-soft)]">
+                            Attach checksheet PDF when a check is issued
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateSystemConfig.mutate(
+                                { emailAttachChecksheet: !emailAttachChecksheet },
+                                {
+                                  onSuccess: () => {
+                                    setEmailAttachChecksheet((prev) => !prev);
+                                    toast.success("Checksheet attachment toggle updated");
+                                  },
+                                  onError: (error) => {
+                                    toast.error(
+                                      error instanceof Error
+                                        ? error.message
+                                        : "Failed to update attachment toggle",
+                                    );
+                                  },
+                                },
+                              )
+                            }
+                            disabled={!emailEnabled || systemConfig.isLoading}
+                            className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                              emailAttachChecksheet && emailEnabled ? "bg-[var(--color-primary)]" : "bg-gray-300"
+                            } ${!emailEnabled ? "opacity-60 cursor-not-allowed" : ""}`}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+                                emailAttachChecksheet && emailEnabled ? "translate-x-5" : "translate-x-1"
+                              }`}
+                            />
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-[var(--color-text-soft)]">
                             Send email when a check is issued
                           </span>
                           <button
@@ -7963,6 +7906,7 @@ Status: {{status}}`}
                               {
                                 emailEnabled,
                                 emailSendOnIssue,
+                                emailAttachChecksheet,
                                 emailSmtpHost,
                                 emailSmtpPort: Number(emailSmtpPort),
                                 emailSmtpUsername,
