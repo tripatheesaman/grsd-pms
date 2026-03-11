@@ -22,6 +22,7 @@ export async function GET() {
       nearHours,
       sectionCode,
       emailEnabled,
+      emailSendOnIssue,
       emailHost,
       emailPort,
       emailUser,
@@ -38,6 +39,7 @@ export async function GET() {
       (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "section_code" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_enabled" } }),
+      (prisma as any).systemConfig?.findUnique({ where: { key: "email_send_on_issue" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_smtp_host" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_smtp_port" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_smtp_username" } }),
@@ -56,6 +58,7 @@ export async function GET() {
       nearOffsetHours: nearHours ? Number(nearHours.value) : 10,
       sectionCode: sectionCode ? sectionCode.value : "",
       emailEnabled: emailEnabled ? emailEnabled.value === "true" : false,
+      emailSendOnIssue: emailSendOnIssue ? emailSendOnIssue.value !== "false" : true,
       emailSmtpHost: emailHost ? emailHost.value : "",
       emailSmtpPort: emailPort ? Number(emailPort.value) : 587,
       emailSmtpUsername: emailUser ? emailUser.value : "",
@@ -74,6 +77,7 @@ export async function GET() {
       nearOffsetHours: 10,
       sectionCode: "",
       emailEnabled: false,
+      emailSendOnIssue: true,
       emailSmtpHost: "",
       emailSmtpPort: 587,
       emailSmtpUsername: "",
@@ -94,6 +98,7 @@ const updateConfigSchema = z.object({
   nearOffsetHours: z.number().int().nonnegative().max(10000).optional(),
   sectionCode: z.string().max(50).optional(),
   emailEnabled: z.boolean().optional(),
+  emailSendOnIssue: z.boolean().optional(),
   emailSmtpHost: z.string().max(255).optional(),
   emailSmtpPort: z.number().int().positive().max(65535).optional(),
   emailSmtpUsername: z.string().max(255).optional(),
@@ -167,6 +172,14 @@ export async function PATCH(request: Request) {
         key: "email_enabled",
         value: parsed.data.emailEnabled ? "true" : "false",
         description: "Whether email notifications are enabled globally",
+      });
+    }
+
+    if (parsed.data.emailSendOnIssue !== undefined) {
+      configs.push({
+        key: "email_send_on_issue",
+        value: parsed.data.emailSendOnIssue ? "true" : "false",
+        description: "Whether to send email notifications when a check is issued",
       });
     }
 
@@ -289,6 +302,7 @@ export async function PATCH(request: Request) {
       nearHours,
       sectionCode,
       emailEnabled,
+      emailSendOnIssue,
       emailHost,
       emailPort,
       emailUser,
@@ -305,6 +319,7 @@ export async function PATCH(request: Request) {
       (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "section_code" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_enabled" } }),
+      (prisma as any).systemConfig?.findUnique({ where: { key: "email_send_on_issue" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_smtp_host" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_smtp_port" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_smtp_username" } }),
@@ -323,6 +338,7 @@ export async function PATCH(request: Request) {
       nearOffsetHours: nearHours ? Number(nearHours.value) : 10,
       sectionCode: sectionCode ? sectionCode.value : "",
       emailEnabled: emailEnabled ? emailEnabled.value === "true" : false,
+      emailSendOnIssue: emailSendOnIssue ? emailSendOnIssue.value !== "false" : true,
       emailSmtpHost: emailHost ? emailHost.value : "",
       emailSmtpPort: emailPort ? Number(emailPort.value) : 587,
       emailSmtpUsername: emailUser ? emailUser.value : "",

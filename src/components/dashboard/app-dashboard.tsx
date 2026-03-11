@@ -826,6 +826,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       setNearHours(String(systemConfig.data.nearOffsetHours));
       setSectionCode((systemConfig.data as any).sectionCode || "");
       setEmailEnabled(systemConfig.data.emailEnabled);
+      setEmailSendOnIssue((systemConfig.data as any).emailSendOnIssue ?? true);
       setEmailSmtpHost(systemConfig.data.emailSmtpHost || "");
       setEmailSmtpPort(String(systemConfig.data.emailSmtpPort ?? 587));
       setEmailSmtpUsername(systemConfig.data.emailSmtpUsername || "");
@@ -920,6 +921,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [nearHours, setNearHours] = useState("10");
   const [sectionCode, setSectionCode] = useState("");
   const [emailEnabled, setEmailEnabled] = useState(false);
+  const [emailSendOnIssue, setEmailSendOnIssue] = useState(true);
   const [emailSmtpHost, setEmailSmtpHost] = useState("");
   const [emailSmtpPort, setEmailSmtpPort] = useState("587");
   const [emailSmtpUsername, setEmailSmtpUsername] = useState("");
@@ -948,6 +950,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [equipmentMgmtStatusFilter, setEquipmentMgmtStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
   const [equipmentMgmtSortBy, setEquipmentMgmtSortBy] = useState<"number" | "name" | "hours" | "avgHours">("number");
   const [equipmentMgmtSortOrder, setEquipmentMgmtSortOrder] = useState<"asc" | "desc">("asc");
+  const [equipmentMgmtPage, setEquipmentMgmtPage] = useState(1);
+  const [equipmentMgmtPageSize, setEquipmentMgmtPageSize] = useState<10 | 25 | 50 | 100>(25);
+  const equipmentNumberCollator = useMemo(
+    () => new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }),
+    [],
+  );
   const [checkSheetMgmtTab, setCheckSheetMgmtTab] = useState<"equipment" | "checksheets">("equipment");
   const [checkSheetMgmtSearch, setCheckSheetMgmtSearch] = useState("");
   const [checkSheetMgmtStatusFilter, setCheckSheetMgmtStatusFilter] = useState<"ALL" | "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE">("ALL");
@@ -1112,7 +1120,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         const hasCompletedAt = s.completedAt !== null && s.completedAt !== undefined && s.completedAt !== "";
         const hasIssuedAt = s.issuedAt !== null && s.issuedAt !== undefined && s.issuedAt !== "";
         
-        // Priority: completedAt > issuedAt > status
         let effectiveStatus: string;
         if (hasCompletedAt) {
           effectiveStatus = "COMPLETED";
@@ -3168,7 +3175,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                   {(() => {
                     const allChecks = checksheets.data ?? [];
                     const filteredChecks = allChecks.filter((sheet) => {
-                      // Upcoming view should not show ongoing (ISSUED) or completed checks
                       if (sheet.status === "ISSUED" || sheet.status === "COMPLETED") {
                         return false;
                       }
@@ -3921,7 +3927,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       const hasCompletedAt = sheet.completedAt !== null && sheet.completedAt !== undefined && sheet.completedAt !== "";
                       const hasIssuedAt = sheet.issuedAt !== null && sheet.issuedAt !== undefined && sheet.issuedAt !== "";
                       
-                      // Priority: completedAt > issuedAt > status
                       let effectiveStatus: string;
                       if (hasCompletedAt) {
                         effectiveStatus = "COMPLETED";
@@ -4469,13 +4474,19 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           <input
                             type="text"
                             value={equipmentMgmtSearch}
-                            onChange={(e) => setEquipmentMgmtSearch(e.target.value)}
+                            onChange={(e) => {
+                              setEquipmentMgmtSearch(e.target.value);
+                              setEquipmentMgmtPage(1);
+                            }}
                             placeholder="Search equipment..."
                             className="h-9 w-64 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                           />
                           <select
                             value={equipmentMgmtClassFilter}
-                            onChange={(e) => setEquipmentMgmtClassFilter(e.target.value)}
+                            onChange={(e) => {
+                              setEquipmentMgmtClassFilter(e.target.value);
+                              setEquipmentMgmtPage(1);
+                            }}
                             className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                           >
                             <option value="ALL">All Classes</option>
@@ -4485,7 +4496,10 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           </select>
                           <select
                             value={equipmentMgmtStatusFilter}
-                            onChange={(e) => setEquipmentMgmtStatusFilter(e.target.value as typeof equipmentMgmtStatusFilter)}
+                            onChange={(e) => {
+                              setEquipmentMgmtStatusFilter(e.target.value as typeof equipmentMgmtStatusFilter);
+                              setEquipmentMgmtPage(1);
+                            }}
                             className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                           >
                             <option value="ALL">All Status</option>
@@ -4498,6 +4512,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               const [sortBy, sortOrder] = e.target.value.split("-") as [typeof equipmentMgmtSortBy, typeof equipmentMgmtSortOrder];
                               setEquipmentMgmtSortBy(sortBy);
                               setEquipmentMgmtSortOrder(sortOrder);
+                              setEquipmentMgmtPage(1);
                             }}
                             className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                           >
@@ -4510,7 +4525,23 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             <option value="avgHours-asc">Avg Hours (Low-High)</option>
                             <option value="avgHours-desc">Avg Hours (High-Low)</option>
                           </select>
+                          <select
+                            value={equipmentMgmtPageSize}
+                            onChange={(e) => {
+                              setEquipmentMgmtPageSize(Number(e.target.value) as 10 | 25 | 50 | 100);
+                              setEquipmentMgmtPage(1);
+                            }}
+                            className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                          >
+                            <option value={10}>10 / page</option>
+                            <option value={25}>25 / page</option>
+                            <option value={50}>50 / page</option>
+                            <option value={100}>100 / page</option>
+                          </select>
                         </div>
+                        <p className="text-xs font-semibold text-[var(--color-text-soft)]">
+                          Total equipment: {(equipments.data ?? []).length}
+                        </p>
                       </div>
                     </div>
                     <div className="space-y-3 max-h-[600px] overflow-y-auto">
@@ -4543,113 +4574,157 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             bVal = b.averageHoursPerDay;
                           }
                           if (typeof aVal === "string") {
-                            return equipmentMgmtSortOrder === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+                            if (equipmentMgmtSortBy === "number") {
+                              return equipmentMgmtSortOrder === "asc"
+                                ? equipmentNumberCollator.compare(aVal, bVal)
+                                : equipmentNumberCollator.compare(bVal, aVal);
+                            }
+                            return equipmentMgmtSortOrder === "asc"
+                              ? aVal.localeCompare(bVal)
+                              : bVal.localeCompare(aVal);
                           }
                           return equipmentMgmtSortOrder === "asc" ? aVal - bVal : bVal - aVal;
                         });
-                        return filtered.map((eq) => (
-                          <div
-                            key={eq.id}
-                            className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md hover:shadow-lg transition-all"
-                          >
-                            <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-3 mb-2">
-                                  <p className="text-base font-bold text-[var(--color-text)]">{eq.equipmentNumber}</p>
-                                  <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-bold">{eq.equipmentClass}</span>
-                                </div>
-                                <p className="text-sm font-medium text-[var(--color-text-soft)] mb-2">{eq.displayName}</p>
-                                <div className="grid grid-cols-3 gap-4 text-xs">
-                                  <div>
-                                    <p className="font-semibold text-[var(--color-text-soft)]">Current Hours</p>
-                                    <p className="font-bold text-[var(--color-text)]">{eq.currentHours.toFixed(2)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="font-semibold text-[var(--color-text-soft)]">Avg Hours/Day</p>
-                                    <p className="font-bold text-[var(--color-text)]">{eq.averageHoursPerDay.toFixed(2)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="font-semibold text-[var(--color-text-soft)]">Check Rules</p>
-                                    <p className="font-bold text-[var(--color-text)]">{eq.activeRuleCount}</p>
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="flex gap-2 ml-4">
+                        const total = filtered.length;
+                        const totalPages = Math.max(1, Math.ceil(total / equipmentMgmtPageSize));
+                        const safePage = Math.min(Math.max(1, equipmentMgmtPage), totalPages);
+                        const startIndex = (safePage - 1) * equipmentMgmtPageSize;
+                        const endIndex = Math.min(startIndex + equipmentMgmtPageSize, total);
+                        const pageItems = filtered.slice(startIndex, endIndex);
+
+                        return (
+                          <>
+                            <div className="flex items-center justify-between flex-wrap gap-3">
+                              <p className="text-xs font-medium text-[var(--color-text-soft)]">
+                                {total === 0 ? "Showing 0 of 0" : `Showing ${startIndex + 1}-${endIndex} of ${total}`}
+                              </p>
+                              <div className="flex items-center gap-2">
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedEquipmentForMgmt(eq.id);
-                                    setShowEquipmentDetailsModal(true);
-                                  }}
-                                  className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+                                  onClick={() => setEquipmentMgmtPage((p) => Math.max(1, p - 1))}
+                                  disabled={safePage <= 1}
+                                  className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-bold text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--color-surface-strong)] transition-colors"
                                 >
-                                  View Details
+                                  Previous
                                 </button>
+                                <p className="text-xs font-semibold text-[var(--color-text-soft)]">
+                                  Page {safePage} / {totalPages}
+                                </p>
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    setSelectedEquipmentForMgmt(eq.id);
-                                    setShowEquipmentEditModal(true);
-                                  }}
-                                  className="rounded-lg border-2 border-[var(--color-primary)] bg-white px-3 py-1.5 text-xs font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)] hover:text-white"
+                                  onClick={() => setEquipmentMgmtPage((p) => Math.min(totalPages, p + 1))}
+                                  disabled={safePage >= totalPages}
+                                  className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-bold text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--color-surface-strong)] transition-colors"
                                 >
-                                  Edit
-                                </button>
-                                {eq.hasActiveGrounding ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedEquipmentForMgmt(eq.id);
-                                      setGroundEndDate(new Date().toISOString().slice(0, 10));
-                                      setShowEndGroundingModal(true);
-                                    }}
-                                    className="rounded-lg border-2 border-green-600 bg-white px-3 py-1.5 text-xs font-bold text-green-700 transition-all hover:bg-green-600 hover:text-white"
-                                  >
-                                    Unground
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedEquipmentForMgmt(eq.id);
-                                      setGroundFromDate(new Date().toISOString().slice(0, 10));
-                                      setGroundReason("");
-                                      setShowGroundEquipmentModal(true);
-                                    }}
-                                    className="rounded-lg border-2 border-yellow-500 bg-white px-3 py-1.5 text-xs font-bold text-yellow-600 transition-all hover:bg-yellow-500 hover:text-white"
-                                  >
-                                    Ground
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDeleteConfirmModal({
-                                      type: "equipment",
-                                      id: eq.id,
-                                      name: eq.equipmentNumber,
-                                      onConfirm: () => {
-                                        deleteEquipment.mutate(eq.id, {
-                                          onSuccess: () => {
-                                            toast.success("Equipment deleted successfully");
-                                            setDeleteConfirmModal(null);
-                                          },
-                                          onError: (error) => {
-                                            toast.error(error instanceof Error ? error.message : "Failed to delete equipment");
-                                            setDeleteConfirmModal(null);
-                                          },
-                                        });
-                                      },
-                                    });
-                                  }}
-                                  className="rounded-lg border-2 border-red-500 bg-white px-3 py-1.5 text-xs font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white"
-                                >
-                                  Delete
+                                  Next
                                 </button>
                               </div>
                             </div>
-                          </div>
-                        ));
+                            {pageItems.map((eq) => (
+                              <div
+                                key={eq.id}
+                                className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md hover:shadow-lg transition-all"
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div className="flex-1">
+                                    <div className="flex items-center gap-3 mb-2">
+                                      <p className="text-base font-bold text-[var(--color-text)]">{eq.equipmentNumber}</p>
+                                      <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-800 text-xs font-bold">{eq.equipmentClass}</span>
+                                    </div>
+                                    <p className="text-sm font-medium text-[var(--color-text-soft)] mb-2">{eq.displayName}</p>
+                                    <div className="grid grid-cols-3 gap-4 text-xs">
+                                      <div>
+                                        <p className="font-semibold text-[var(--color-text-soft)]">Current Hours</p>
+                                        <p className="font-bold text-[var(--color-text)]">{eq.currentHours.toFixed(2)}</p>
+                                      </div>
+                                      <div>
+                                        <p className="font-semibold text-[var(--color-text-soft)]">Avg Hours/Day</p>
+                                        <p className="font-bold text-[var(--color-text)]">{eq.averageHoursPerDay.toFixed(2)}</p>
+                                      </div>
+                                      <div>
+                                        <p className="font-semibold text-[var(--color-text-soft)]">Check Rules</p>
+                                        <p className="font-bold text-[var(--color-text)]">{eq.activeRuleCount}</p>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2 ml-4">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedEquipmentForMgmt(eq.id);
+                                        setShowEquipmentDetailsModal(true);
+                                      }}
+                                      className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+                                    >
+                                      View Details
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedEquipmentForMgmt(eq.id);
+                                        setShowEquipmentEditModal(true);
+                                      }}
+                                      className="rounded-lg border-2 border-[var(--color-primary)] bg-white px-3 py-1.5 text-xs font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)] hover:text-white"
+                                    >
+                                      Edit
+                                    </button>
+                                    {eq.hasActiveGrounding ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedEquipmentForMgmt(eq.id);
+                                          setGroundEndDate(new Date().toISOString().slice(0, 10));
+                                          setShowEndGroundingModal(true);
+                                        }}
+                                        className="rounded-lg border-2 border-green-600 bg-white px-3 py-1.5 text-xs font-bold text-green-700 transition-all hover:bg-green-600 hover:text-white"
+                                      >
+                                        Unground
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedEquipmentForMgmt(eq.id);
+                                          setGroundFromDate(new Date().toISOString().slice(0, 10));
+                                          setGroundReason("");
+                                          setShowGroundEquipmentModal(true);
+                                        }}
+                                        className="rounded-lg border-2 border-yellow-500 bg-white px-3 py-1.5 text-xs font-bold text-yellow-600 transition-all hover:bg-yellow-500 hover:text-white"
+                                      >
+                                        Ground
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDeleteConfirmModal({
+                                          type: "equipment",
+                                          id: eq.id,
+                                          name: eq.equipmentNumber,
+                                          onConfirm: () => {
+                                            deleteEquipment.mutate(eq.id, {
+                                              onSuccess: () => {
+                                                toast.success("Equipment deleted successfully");
+                                                setDeleteConfirmModal(null);
+                                              },
+                                              onError: (error) => {
+                                                toast.error(error instanceof Error ? error.message : "Failed to delete equipment");
+                                                setDeleteConfirmModal(null);
+                                              },
+                                            });
+                                          },
+                                        });
+                                      }}
+                                      className="rounded-lg border-2 border-red-500 bg-white px-3 py-1.5 text-xs font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        );
                       })()}
                       {(() => {
                         const filtered = (equipments.data ?? []).filter((eq) => {
@@ -7726,6 +7801,43 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           </button>
                         </div>
 
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-xs font-semibold text-[var(--color-text-soft)]">
+                            Send email when a check is issued
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateSystemConfig.mutate(
+                                { emailSendOnIssue: !emailSendOnIssue },
+                                {
+                                  onSuccess: () => {
+                                    setEmailSendOnIssue((prev) => !prev);
+                                    toast.success("Issued email toggle updated");
+                                  },
+                                  onError: (error) => {
+                                    toast.error(
+                                      error instanceof Error
+                                        ? error.message
+                                        : "Failed to update issued email toggle",
+                                    );
+                                  },
+                                },
+                              )
+                            }
+                            disabled={!emailEnabled || systemConfig.isLoading}
+                            className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${
+                              emailSendOnIssue && emailEnabled ? "bg-[var(--color-primary)]" : "bg-gray-300"
+                            } ${!emailEnabled ? "opacity-60 cursor-not-allowed" : ""}`}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+                                emailSendOnIssue && emailEnabled ? "translate-x-5" : "translate-x-1"
+                              }`}
+                            />
+                          </button>
+                        </div>
+
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div>
                             <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">SMTP Host</label>
@@ -7850,6 +7962,7 @@ Status: {{status}}`}
                             updateSystemConfig.mutate(
                               {
                                 emailEnabled,
+                                emailSendOnIssue,
                                 emailSmtpHost,
                                 emailSmtpPort: Number(emailSmtpPort),
                                 emailSmtpUsername,
