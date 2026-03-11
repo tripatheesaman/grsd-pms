@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { access as fsAccess } from "fs/promises";
+import { access as fsAccess, readdir } from "fs/promises";
 import { constants } from "fs";
 import { requireAccess, parseBody } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
@@ -101,20 +101,53 @@ export async function GET(_: Request, context: RouteContext) {
   });
 
   const safeEquipment = equipment.equipmentNumber.replace(/[^A-Za-z0-9_-]/g, "_");
-  const templateChecks = rules.map((rule) => {
-    const safeCode = rule.code.toUpperCase();
-    const templateFileName = `${safeEquipment}_${safeCode}.pdf`;
-    const absolutePath = buildUploadPath("checksheets", templateFileName);
-    return { rule, absolutePath, templateFileName };
-  });
+  const equipmentNumberAsInt = Number.parseInt(equipment.equipmentNumber, 10);
+  const equipmentNumberIsNumeric =
+    Number.isFinite(equipmentNumberAsInt) && String(equipmentNumberAsInt) === equipment.equipmentNumber.trim();
+
+  // Support both naming conventions:
+  // - Single equipment: 1005_A.pdf (existing behavior)
+  // - Range: 1003-1004_A.pdf (new behavior)
+  const checksheetsDir = buildUploadPath("checksheets");
+  let rangeTemplates: Array<{ from: number; to: number; code: string; fileName: string }> = [];
+  if (equipmentNumberIsNumeric) {
+    try {
+      const files = await readdir(checksheetsDir);
+      rangeTemplates = files
+        .map((fileName) => {
+          const m = /^(\d+)-(\d+)_([A-Za-z])\.pdf$/.exec(fileName);
+          if (!m) return null;
+          const from = Number.parseInt(m[1]!, 10);
+          const to = Number.parseInt(m[2]!, 10);
+          const code = m[3]!.toUpperCase();
+          if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+          if (from > to) return null;
+          return { from, to, code, fileName };
+        })
+        .filter(Boolean) as Array<{ from: number; to: number; code: string; fileName: string }>;
+
+      // Prefer the most specific range (smallest span), then lowest start.
+      rangeTemplates.sort((a, b) => (a.to - a.from) - (b.to - b.from) || a.from - b.from);
+    } catch {
+      // If directory doesn't exist / unreadable, treat as no range templates.
+      rangeTemplates = [];
+    }
+  }
 
   const templateStatuses = await Promise.all(
-    templateChecks.map(async ({ absolutePath, templateFileName }) => {
+    rules.map(async (rule) => {
+      const safeCode = rule.code.toUpperCase();
+      const directFileName = `${safeEquipment}_${safeCode}.pdf`;
+      const directAbsolutePath = buildUploadPath("checksheets", directFileName);
       try {
-        await fsAccess(absolutePath, constants.F_OK);
-        return `${UPLOADS_BASE_URL}/checksheets/${templateFileName}`;
+        await fsAccess(directAbsolutePath, constants.F_OK);
+        return `${UPLOADS_BASE_URL}/checksheets/${directFileName}`;
       } catch {
-        return null;
+        if (!equipmentNumberIsNumeric) return null;
+        const rangeMatch = rangeTemplates.find(
+          (t) => t.code === safeCode && equipmentNumberAsInt >= t.from && equipmentNumberAsInt <= t.to
+        );
+        return rangeMatch ? `${UPLOADS_BASE_URL}/checksheets/${rangeMatch.fileName}` : null;
       }
     })
   );

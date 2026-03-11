@@ -4,6 +4,7 @@ import { CheckSheet, Equipment } from "@prisma/client";
 
 type EmailConfig = {
   enabled: boolean;
+  sendOnIssue: boolean;
   host: string | null;
   port: number | null;
   username: string | null;
@@ -17,6 +18,7 @@ type EmailConfig = {
 
 const CONFIG_KEYS = [
   "email_enabled",
+  "email_send_on_issue",
   "email_smtp_host",
   "email_smtp_port",
   "email_smtp_username",
@@ -41,6 +43,7 @@ async function loadEmailConfig(): Promise<EmailConfig> {
   }
 
   const enabled = map["email_enabled"] === "true";
+  const sendOnIssue = map["email_send_on_issue"] !== "false"; // default true
   const host = map["email_smtp_host"] ?? null;
   const port = map["email_smtp_port"] ? Number(map["email_smtp_port"]) : null;
   const username = map["email_smtp_username"] ?? null;
@@ -80,6 +83,7 @@ async function loadEmailConfig(): Promise<EmailConfig> {
 
   return {
     enabled,
+    sendOnIssue,
     host,
     port,
     username,
@@ -128,6 +132,7 @@ export async function sendCheckEmail(context: EmailContext) {
   const config = await loadEmailConfig();
 
   if (!config.enabled) return;
+  if (context.type === "issued" && !config.sendOnIssue) return;
   if (config.recipients.length === 0) return;
 
   const transport = buildTransport(config);

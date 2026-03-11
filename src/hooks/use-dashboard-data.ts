@@ -269,6 +269,7 @@ type SystemConfig = {
   nearOffsetHours: number;
   sectionCode?: string;
   emailEnabled: boolean;
+  emailSendOnIssue: boolean;
   emailSmtpHost: string;
   emailSmtpPort: number;
   emailSmtpUsername: string;
@@ -297,6 +298,7 @@ export function useUpdateSystemConfig() {
       nearOffsetHours?: number;
       sectionCode?: string;
       emailEnabled?: boolean;
+      emailSendOnIssue?: boolean;
       emailSmtpHost?: string;
       emailSmtpPort?: number;
       emailSmtpUsername?: string;
