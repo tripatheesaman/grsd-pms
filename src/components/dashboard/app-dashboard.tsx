@@ -1021,6 +1021,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [showRulePdfUploadModal, setShowRulePdfUploadModal] = useState<string | null>(null);
   const [pdfUploadFile, setPdfUploadFile] = useState<File | null>(null);
   const [selectedAllChecksSheet, setSelectedAllChecksSheet] = useState<CheckSheetManagementItem | null>(null);
+  const [lastCheckImportFile, setLastCheckImportFile] = useState<File | null>(null);
+  const [lastCheckImportBusy, setLastCheckImportBusy] = useState(false);
+  const [lastCheckImportResult, setLastCheckImportResult] = useState<{
+    totalRows: number;
+    validRows: number;
+    created: number;
+    updated: number;
+    errorCount: number;
+    errors: Array<{ row: number; message: string }>;
+  } | null>(null);
   const [entriesReportStatusFilter, setEntriesReportStatusFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [entriesReportEquipmentFilter, setEntriesReportEquipmentFilter] = useState("ALL");
   const [entriesReportEquipmentFrom, setEntriesReportEquipmentFrom] = useState("");
@@ -7456,169 +7466,110 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
           {activeSection === "admin" && (
             <div className="space-y-6">
-              <Card title="Equipment Configuration">
+              <Card title="Bulk Import Last Completed Check">
                 {canAdmin ? (
-                  <form className="space-y-4" onSubmit={onCreateEquipment}>
-                    <div>
-                      <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Equipment Number</label>
-                      <input
-                        required
-                        value={equipmentNumber}
-                        onChange={(e) => setEquipmentNumber(e.target.value)}
-                        className={inputClass}
-                        placeholder="E.g., 116"
-                        maxLength={40}
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Avg Hours/Day</label>
-                        <input
-                          type="number"
-                          required
-                          min={0}
-                          step={0.1}
-                          value={avgHours}
-                          onChange={(e) => setAvgHours(e.target.value)}
-                          className={inputClass}
-                        />
+                        <p className="text-sm font-bold text-[var(--color-text)]">Template</p>
+                        <p className="text-xs text-[var(--color-text-soft)]">
+                          Download the template, fill it, then upload it here. Columns: equipmentNumber, lastCheckCode, lastCheckDate, lastCheckHours
+                        </p>
                       </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Current Hours</label>
-                        <input
-                          type="number"
-                          required
-                          min={0}
-                          step={0.1}
-                          value={currentHours}
-                          onChange={(e) => setCurrentHours(e.target.value)}
-                          className={inputClass}
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Previous Check Code</label>
-                        <input
-                          type="text"
-                          value={previousCheckCode}
-                          onChange={(e) => setPreviousCheckCode(e.target.value.toUpperCase().slice(0, 1))}
-                          className={inputClass}
-                          placeholder="A"
-                          maxLength={1}
-                          pattern="[A-Z]"
-                        />
-                        <p className="mt-1 text-xs text-[var(--color-text-soft)]">Optional: Last completed check</p>
-                      </div>
-                      <div>
-                        <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Previous Check Date</label>
-                        <input
-                          type="date"
-                          value={previousCheckDate}
-                          onChange={(e) => setPreviousCheckDate(e.target.value)}
-                          className={inputClass}
-                          disabled={!previousCheckCode}
-                        />
-                        <p className="mt-1 text-xs text-[var(--color-text-soft)]">Date when check was completed</p>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="mb-3 flex items-center justify-between">
-                        <label className="block text-sm font-bold text-[var(--color-text)]">Check Rules</label>
+                      <div className="flex gap-2">
                         <button
                           type="button"
-                          onClick={addCheckRule}
-                          disabled={checkRules.length >= 26}
-                          className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => window.open(apiPath("/api/equipment/last-check-import/template?format=xlsx"), "_blank")}
+                          className="rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg"
                         >
-                          + Add Check
+                          Download XLSX Template
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => window.open(apiPath("/api/equipment/last-check-import/template?format=csv"), "_blank")}
+                          className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-xs font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
+                        >
+                          Download CSV Template
                         </button>
                       </div>
-                      <div className="space-y-2">
-                        {checkRules.map((rule, index) => {
-                          const isDuplicate = checkRules.filter((r) => r.code.toUpperCase() === rule.code.toUpperCase()).length > 1;
-                          const isValidCode = /^[A-Z]$/.test(rule.code);
-                          const isValidHours = rule.intervalHours && Number(rule.intervalHours) > 0;
+                    </div>
 
-                          return (
-                            <div
-                              key={index}
-                              className={`flex gap-2 rounded-lg border-2 p-3 ${
-                                isDuplicate || !isValidCode || !isValidHours
-                                  ? "border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5"
-                                  : "border-[var(--color-surface-strong)] bg-white"
-                              }`}
-                            >
-                              <div className="w-20">
-                                <input
-                                  type="text"
-                                  required
-                                  value={rule.code}
-                                  onChange={(e) => updateCheckRule(index, "code", e.target.value)}
-                                  className={`h-11 w-full rounded-lg border-2 px-3 text-center text-sm font-bold uppercase outline-none transition-all ${
-                                    isDuplicate || !isValidCode
-                                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]"
-                                      : "border-[var(--color-surface-strong)] bg-white focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                                  }`}
-                                  placeholder="A"
-                                  maxLength={1}
-                                  pattern="[A-Z]"
-                                />
-                                <p className="mt-1 text-[10px] font-medium text-[var(--color-text-soft)]">Code</p>
-                              </div>
-                              <div className="flex-1">
-                                <input
-                                  type="number"
-                                  required
-                                  min={1}
-                                  step={1}
-                                  value={rule.intervalHours}
-                                  onChange={(e) => updateCheckRule(index, "intervalHours", e.target.value)}
-                                  className={`h-11 w-full rounded-lg border-2 px-3 text-sm font-semibold outline-none transition-all ${
-                                    !isValidHours
-                                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-                                      : "border-[var(--color-surface-strong)] bg-white focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                                  }`}
-                                  placeholder="500"
-                                />
-                                <p className="mt-1 text-[10px] font-medium text-[var(--color-text-soft)]">Interval Hours</p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => removeCheckRule(index)}
-                                disabled={checkRules.length === 1}
-                                className="mt-6 h-11 rounded-lg bg-[var(--color-accent)] px-4 text-sm font-bold text-white transition-all hover:bg-[var(--color-accent-dark)] disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                ×
-                              </button>
-                            </div>
-                          );
-                        })}
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md space-y-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-[var(--color-text)]">Upload filled template</p>
+                          <p className="text-xs text-[var(--color-text-soft)]">Supported: .xlsx or .csv</p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!lastCheckImportFile || lastCheckImportBusy}
+                          onClick={async () => {
+                            if (!lastCheckImportFile) return;
+                            setLastCheckImportBusy(true);
+                            setLastCheckImportResult(null);
+                            try {
+                              const fd = new FormData();
+                              fd.append("file", lastCheckImportFile);
+                              const res = await fetch(apiPath("/api/equipment/last-check-import/import"), {
+                                method: "POST",
+                                body: fd,
+                              });
+                              const payload = await res.json();
+                              if (!res.ok) {
+                                const msg =
+                                  payload?.error?.message ||
+                                  payload?.message ||
+                                  "Import failed";
+                                toast.error(msg);
+                                if (payload?.errors) {
+                                  setLastCheckImportResult(payload);
+                                }
+                                return;
+                              }
+                              setLastCheckImportResult(payload);
+                              toast.success(`Imported: ${payload.created} created, ${payload.updated} updated`);
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : "Import failed");
+                            } finally {
+                              setLastCheckImportBusy(false);
+                            }
+                          }}
+                          className="rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {lastCheckImportBusy ? "Importing..." : "Import"}
+                        </button>
                       </div>
-                      {checkRules.length === 0 && (
-                        <p className="py-4 text-center text-sm font-medium text-[var(--color-text-soft)]">
-                          No check rules. Click "Add Check" to add one.
-                        </p>
+
+                      <input
+                        type="file"
+                        accept=".xlsx,.csv"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] ?? null;
+                          setLastCheckImportFile(f);
+                          setLastCheckImportResult(null);
+                        }}
+                        className="block w-full text-xs"
+                      />
+
+                      {lastCheckImportResult && (
+                        <div className="rounded-lg border border-[var(--color-surface-strong)] bg-white p-3 space-y-2">
+                          <p className="text-xs font-bold text-[var(--color-text)]">
+                            Result: {lastCheckImportResult.validRows}/{lastCheckImportResult.totalRows} valid, {lastCheckImportResult.created} created, {lastCheckImportResult.updated} updated, {lastCheckImportResult.errorCount} errors
+                          </p>
+                          {lastCheckImportResult.errors?.length > 0 && (
+                            <div className="max-h-40 overflow-y-auto text-xs">
+                              {lastCheckImportResult.errors.slice(0, 200).map((err, idx) => (
+                                <div key={idx} className="flex gap-2">
+                                  <span className="font-bold text-red-600">Row {err.row}:</span>
+                                  <span>{err.message}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
-                    <button
-                      type="submit"
-                      disabled={
-                        !equipmentNumber ||
-                        checkRules.length === 0 ||
-                        checkRules.some(
-                          (r) =>
-                            !/^[A-Z]$/.test(r.code) ||
-                            !r.intervalHours ||
-                            Number(r.intervalHours) <= 0 ||
-                            checkRules.filter((rule) => rule.code.toUpperCase() === r.code.toUpperCase()).length > 1
-                        )
-                      }
-                      className="w-full rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Create Equipment
-                    </button>
-                  </form>
+                  </div>
                 ) : (
                   <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Admin access required</p>
                 )}
