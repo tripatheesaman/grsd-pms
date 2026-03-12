@@ -1,4 +1,4 @@
-import { AlertLevel, CheckStatus, TriggerType } from "@prisma/client";
+import { AlertLevel, CheckStatus, EntryStatus, TriggerType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { buildYearlyPlan, deriveForecastAverageHoursPerDay, determineStatus } from "@/lib/planning/engine";
 
@@ -80,7 +80,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
   const allEntries = await prisma.dailyEntry.findMany({
     where: {
       equipmentId,
-      status: "APPROVED",
+      status: EntryStatus.APPROVED,
     },
     select: {
       hoursRun: true,

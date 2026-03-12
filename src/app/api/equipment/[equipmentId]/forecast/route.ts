@@ -1,3 +1,4 @@
+import { EntryStatus } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { buildForecastMetrics } from "@/lib/planning/forecast-metrics";
@@ -34,7 +35,7 @@ export async function GET(_: Request, context: RouteContext) {
   const allEntries = await prisma.dailyEntry.findMany({
     where: {
       equipmentId,
-      status: "APPROVED",
+      status: EntryStatus.APPROVED,
     },
     select: {
       hoursRun: true,
