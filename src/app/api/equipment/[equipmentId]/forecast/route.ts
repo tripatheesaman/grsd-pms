@@ -22,24 +22,31 @@ export async function GET(_: Request, context: RouteContext) {
     where: {
       id: equipmentId,
     },
-    include: {
-      entries: {
-        select: {
-          hoursRun: true,
-          entryDate: true,
-        },
-        orderBy: {
-          entryDate: "asc",
-        },
-      },
+    select: {
+      id: true,
+      averageHoursPerDay: true,
     },
   });
   if (!equipment) {
     return fail("NOT_FOUND", "Equipment not found", 404);
   }
 
+  const allEntries = await prisma.dailyEntry.findMany({
+    where: {
+      equipmentId,
+      status: "APPROVED",
+    },
+    select: {
+      hoursRun: true,
+      entryDate: true,
+    },
+    orderBy: {
+      entryDate: "asc",
+    },
+  });
+
   const metrics = buildForecastMetrics(
-    equipment.entries.map((entry) => Number(entry.hoursRun)),
+    allEntries.map((entry) => Number(entry.hoursRun)),
     Number(equipment.averageHoursPerDay),
   );
 
