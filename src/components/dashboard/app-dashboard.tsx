@@ -9,8 +9,10 @@ import {
   useAnalytics,
   useApproveEntry,
   useApproveEntriesByDate,
+  useRejectEntriesByDate,
   useCheckSheets,
   useCreateEntry,
+  useCreateEntriesBulk,
   useCreateEquipment,
   useCreateGrounding,
   useCreateUser,
@@ -804,12 +806,14 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const updatePermissions = useUpdatePermissions();
   const createEquipment = useCreateEquipment();
   const createEntry = useCreateEntry();
+  const createEntriesBulk = useCreateEntriesBulk();
   const updateCheckSheet = useUpdateCheckSheet();
   const systemConfig = useSystemConfig();
   const updateSystemConfig = useUpdateSystemConfig();
   const pendingEntries = usePendingEntries();
   const approveEntry = useApproveEntry();
   const approveEntriesByDate = useApproveEntriesByDate();
+  const rejectEntriesByDate = useRejectEntriesByDate();
   const rejectEntry = useRejectEntry();
   const updateEntry = useUpdateEntry();
   const deleteEntry = useDeleteEntry();
@@ -820,7 +824,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
   useEffect(() => {
     if (systemConfig.data) {
-      setReminderHours(String(systemConfig.data.reminderHoursBefore));
       setApproachingHours(String(systemConfig.data.approachingOffsetHours));
       setIssueHours(String(systemConfig.data.issueOffsetHours));
       setNearHours(String(systemConfig.data.nearOffsetHours));
@@ -892,6 +895,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [currentHours, setCurrentHours] = useState("0");
   const [previousCheckCode, setPreviousCheckCode] = useState("");
   const [previousCheckDate, setPreviousCheckDate] = useState("");
+  const [previousCheckHours, setPreviousCheckHours] = useState("");
   const [checkRules, setCheckRules] = useState<Array<{ code: string; intervalHours: string }>>([
     { code: "A", intervalHours: "500" },
   ]);
@@ -911,7 +915,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [completeDate, setCompleteDate] = useState<string>(new Date().toISOString().slice(0, 10));
   const [completeHours, setCompleteHours] = useState<string>("");
   const [selectedAlertModal, setSelectedAlertModal] = useState<string | null>(null);
-  const [reminderHours, setReminderHours] = useState("120");
   const [checkDateFrom, setCheckDateFrom] = useState("");
   const [checkDateTo, setCheckDateTo] = useState("");
   const [checkEquipmentSearch, setCheckEquipmentSearch] = useState("");
@@ -1031,6 +1034,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     errorCount: number;
     errors: Array<{ row: number; message: string }>;
   } | null>(null);
+  const [historyImportFile, setHistoryImportFile] = useState<File | null>(null);
+  const [historyImportBusy, setHistoryImportBusy] = useState(false);
+  const [historyImportResult, setHistoryImportResult] = useState<{
+    totalRows: number;
+    validRows: number;
+    created: number;
+    updated: number;
+    errorCount: number;
+    errors: Array<{ row: number; message: string }>;
+  } | null>(null);
   const [entriesReportStatusFilter, setEntriesReportStatusFilter] = useState<"ALL" | "PENDING" | "APPROVED" | "REJECTED">("ALL");
   const [entriesReportEquipmentFilter, setEntriesReportEquipmentFilter] = useState("ALL");
   const [entriesReportEquipmentFrom, setEntriesReportEquipmentFrom] = useState("");
@@ -1066,6 +1079,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [planExportDateFrom, setPlanExportDateFrom] = useState("");
   const [planExportDateTo, setPlanExportDateTo] = useState("");
   const [planExportMode, setPlanExportMode] = useState<"equipment" | "detailed" | "pictorial">("equipment");
+  const [planRefreshBusy, setPlanRefreshBusy] = useState(false);
+  const [planRefreshResult, setPlanRefreshResult] = useState<{ year: number; equipmentCount: number } | null>(null);
   const [selectedHistoryCheck, setSelectedHistoryCheck] = useState<{
     id: string;
     checkCode: string;
@@ -1573,54 +1588,52 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
   const onBulkSubmit = async () => {
     if (bulkEntries.length === 0) return;
-    const date = new Date(`${entryDate}T00:00:00.000Z`).toISOString();
     const validEntries = bulkEntries.filter((e) => {
       if (!e.equipmentId || !e.hours) return false;
       const value = Number(e.hours);
       if (Number.isNaN(value) || value <= 0) return false;
       return value >= e.previous;
     });
-    let successCount = 0;
-    let errorCount = 0;
-    const failureDetails: Array<{ equipment: string; message: string }> = [];
-
-    for (const entry of validEntries) {
-      try {
-        await createEntry.mutateAsync({
-          equipmentId: entry.equipmentId,
-          entryDate: date,
-          hoursRun: Number(entry.hours),
-        });
-        successCount++;
-      } catch (error) {
-        errorCount++;
-        const equipment = bulkEquipmentList.find((eq) => eq.id === entry.equipmentId);
-        let message = "Unknown error";
-        if (error instanceof Error) {
-          message = error.message;
-        } else if (typeof error === "string") {
-          message = error;
-        }
-        failureDetails.push({
-          equipment: equipment?.equipmentNumber ?? entry.equipmentId,
-          message,
-        });
+    if (validEntries.length === 0) {
+      toast.error("No valid entries to submit");
+      return;
+    }
+    try {
+      const result = await createEntriesBulk.mutateAsync({
+        entryDate,
+        items: validEntries.map((e) => ({
+          equipmentId: e.equipmentId,
+          hoursRun: Number(e.hours),
+        })),
+      });
+      if (result.createdCount > 0) {
+        toast.success(
+          `Successfully created ${result.createdCount} entr${
+            result.createdCount === 1 ? "y" : "ies"
+          } out of ${validEntries.length}`,
+        );
+        setBulkEntries([]);
+      }
+      if (result.failed.length > 0) {
+        const top = result.failed.slice(0, 3);
+        const details = top
+          .map((item) => {
+            const equipment = bulkEquipmentList.find((eq) => eq.id === item.equipmentId);
+            const label = equipment?.equipmentNumber ?? item.equipmentId;
+            return `${label}: ${item.message}`;
+          })
+          .join(" | ");
+        const more = result.failed.length - top.length;
+        const suffix = more > 0 ? ` | and ${more} more` : "";
+        toast.error(`${details}${suffix}`);
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      } else {
+        toast.error("Failed to submit bulk entries");
       }
     }
-
-    if (successCount > 0) {
-      toast.success(`Successfully created ${successCount} entr${successCount === 1 ? "y" : "ies"} out of ${validEntries.length}`);
-    }
-    if (errorCount > 0) {
-      const topFailures = failureDetails.slice(0, 3)
-        .map((item) => `${item.equipment}: ${item.message}`)
-        .join(" | ");
-      const moreCount = errorCount - Math.min(errorCount, 3);
-      const moreText = errorCount > 3 && moreCount > 0 ? ` | and ${moreCount} more` : "";
-      toast.error(`${topFailures}${moreText}`);
-    }
-
-    setBulkEntries([]);
   };
 
   const handleEquipmentSelect = (equipmentId: string) => {
@@ -1721,15 +1734,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       return;
     }
 
-    if (
-      (previousCheckCode && !previousCheckDate) ||
-      (!previousCheckCode && previousCheckDate)
-    ) {
-      toast.error("Previous check code and date must be provided together");
-      return;
-    }
-
-    if (previousCheckCode) {
+    if (previousCheckCode || previousCheckDate || previousCheckHours) {
+      if (!(previousCheckCode && previousCheckDate && previousCheckHours)) {
+        toast.error("Previous check code, date, and hours must all be provided");
+        return;
+      }
+      const hoursValue = Number(previousCheckHours);
+      if (!Number.isFinite(hoursValue) || hoursValue < 0) {
+        toast.error("Previous check hours must be a non-negative number");
+        return;
+      }
       const hasMatchingRule = checkRules.some(
         (rule) => rule.code.toUpperCase() === previousCheckCode.toUpperCase()
       );
@@ -1761,6 +1775,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         checkRules: processedRules,
         previousCheckCode: previousCheckCode.trim() || undefined,
         previousCheckDate: previousCheckDate || undefined,
+        previousCheckHours: previousCheckHours ? Number(previousCheckHours) : undefined,
       },
       {
         onSuccess: () => {
@@ -1772,6 +1787,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           setCreateUsageUnit("HOURS");
           setPreviousCheckCode("");
           setPreviousCheckDate("");
+          setPreviousCheckHours("");
           setCheckRules([{ code: "A", intervalHours: "500" }]);
           setShowEquipmentCreateModal(false);
         },
@@ -3195,7 +3211,36 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       />
                     </div>
                   </div>
-                  <div className="flex justify-end">
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      disabled={planRefreshBusy}
+                      onClick={async () => {
+                        setPlanRefreshBusy(true);
+                        setPlanRefreshResult(null);
+                        try {
+                          const res = await fetch(apiPath(`/api/plan/refresh?year=${year}`), { method: "POST" });
+                          const payload = await res.json();
+                          if (!res.ok) {
+                            const msg =
+                              payload?.error?.message ||
+                              payload?.message ||
+                              "Refresh failed";
+                            toast.error(msg);
+                            return;
+                          }
+                          setPlanRefreshResult(payload);
+                          toast.success(`Plan refreshed for ${payload.equipmentCount} equipments (${payload.year})`);
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : "Refresh failed");
+                        } finally {
+                          setPlanRefreshBusy(false);
+                        }
+                      }}
+                      className="inline-flex items-center rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] shadow-sm transition-all hover:bg-[var(--color-surface-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {planRefreshBusy ? "Refreshing..." : `Refresh Plans (${year})`}
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -3223,6 +3268,11 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       Export
                     </button>
                   </div>
+                  {planRefreshResult && (
+                    <p className="text-xs font-semibold text-[var(--color-text-soft)] text-right">
+                      Refreshed {planRefreshResult.equipmentCount} equipments for {planRefreshResult.year}
+                    </p>
+                  )}
                 </div>
               </Card>
 
@@ -4612,9 +4662,28 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             <option value={100}>100 / page</option>
                           </select>
                         </div>
-                        <p className="text-xs font-semibold text-[var(--color-text-soft)]">
-                          Total equipment: {(equipments.data ?? []).length}
-                        </p>
+                        <div className="flex items-center gap-3">
+                          <p className="text-xs font-semibold text-[var(--color-text-soft)]">
+                            Total equipment: {(equipments.data ?? []).length}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEquipmentNumber("");
+                              setEquipmentDisplayName("");
+                              setAvgHours("8");
+                              setCurrentHours("0");
+                              setPreviousCheckCode("");
+                              setPreviousCheckDate("");
+                              setCheckRules([{ code: "A", intervalHours: "500" }]);
+                              setCreateUsageUnit("HOURS");
+                              setShowEquipmentCreateModal(true);
+                            }}
+                            className="inline-flex items-center rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+                          >
+                            + Add Equipment
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div className="space-y-3 max-h-[600px] overflow-y-auto">
@@ -5227,25 +5296,48 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                     {entriesForDate.length} entr{entriesForDate.length === 1 ? "y" : "ies"} on this day
                                   </p>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (!entriesForDate[0]) return;
-                                    const entryDateIso = entriesForDate[0].entryDate.split("T")[0];
-                                    approveEntriesByDate.mutate(entryDateIso, {
-                                      onSuccess: (result) => {
-                                        toast.success(`Approved ${result.approvedCount} entr${result.approvedCount === 1 ? "y" : "ies"} for ${formatDate(new Date(entryDateIso))}`);
-                                      },
-                                      onError: (error) => {
-                                        toast.error(error instanceof Error ? error.message : "Failed to approve entries for this day");
-                                      },
-                                    });
-                                  }}
-                                  disabled={approveEntriesByDate.isPending}
-                                  className="rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-4 py-2 text-xs font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {approveEntriesByDate.isPending ? "Approving..." : "Approve all for this day"}
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!entriesForDate[0]) return;
+                                      const entryDateIso = entriesForDate[0].entryDate.split("T")[0];
+                                      approveEntriesByDate.mutate(entryDateIso, {
+                                        onSuccess: (result) => {
+                                          const invalid = result.invalidCount ?? 0;
+                                          const suffix = invalid > 0 ? ` (${invalid} skipped)` : "";
+                                          toast.success(`Approved ${result.approvedCount} entr${result.approvedCount === 1 ? "y" : "ies"} for ${formatDate(new Date(entryDateIso))}${suffix}`);
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to approve entries for this day");
+                                        },
+                                      });
+                                    }}
+                                    disabled={approveEntriesByDate.isPending || rejectEntriesByDate.isPending}
+                                    className="rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-4 py-2 text-xs font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {approveEntriesByDate.isPending ? "Approving..." : "Approve all"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (!entriesForDate[0]) return;
+                                      const entryDateIso = entriesForDate[0].entryDate.split("T")[0];
+                                      rejectEntriesByDate.mutate(entryDateIso, {
+                                        onSuccess: (result) => {
+                                          toast.success(`Rejected ${result.rejectedCount} entr${result.rejectedCount === 1 ? "y" : "ies"} for ${formatDate(new Date(entryDateIso))}`);
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to reject entries for this day");
+                                        },
+                                      });
+                                    }}
+                                    disabled={approveEntriesByDate.isPending || rejectEntriesByDate.isPending}
+                                    className="rounded-lg border-2 border-red-500 bg-white px-4 py-2 text-xs font-bold text-red-500 shadow-lg transition-all hover:scale-[1.02] hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {rejectEntriesByDate.isPending ? "Rejecting..." : "Reject all"}
+                                  </button>
+                                </div>
                               </div>
                               <div className="space-y-3">
                                 {entriesForDate.map((entry) => (
@@ -5525,6 +5617,214 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {showEquipmentCreateModal && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+              onClick={() => setShowEquipmentCreateModal(false)}
+            >
+              <div
+                className="relative w-full max-w-2xl rounded-2xl bg-gradient-to-br from-white to-[var(--color-surface)] shadow-2xl p-6 max-h-[90vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-lg font-bold text-[var(--color-text)] mb-4">Add Equipment</h3>
+                <form className="space-y-4" onSubmit={onCreateEquipment}>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="col-span-1">
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Equipment Number *
+                      </label>
+                      <input
+                        type="text"
+                        value={equipmentNumber}
+                        onChange={(e) => setEquipmentNumber(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        required
+                      />
+                    </div>
+                    <div className="col-span-1">
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Display Name
+                      </label>
+                      <input
+                        type="text"
+                        value={equipmentDisplayName}
+                        onChange={(e) => setEquipmentDisplayName(e.target.value)}
+                        placeholder="Defaults to equipment number"
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                    <div className="col-span-1">
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Usage Unit
+                      </label>
+                      <select
+                        value={createUsageUnit}
+                        onChange={(e) => setCreateUsageUnit(e.target.value as "HOURS" | "KM")}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      >
+                        <option value="HOURS">Hours (Hour Meter)</option>
+                        <option value="KM">Kilometers</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Average Hours/Day *
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={avgHours}
+                        onChange={(e) => setAvgHours(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Current Hours *
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={currentHours}
+                        onChange={(e) => setCurrentHours(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Previous Check Code (optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={previousCheckCode}
+                        onChange={(e) => setPreviousCheckCode(e.target.value.toUpperCase().slice(0, 1))}
+                        maxLength={1}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Previous Check Date (optional)
+                      </label>
+                      <input
+                        type="date"
+                        value={previousCheckDate}
+                        onChange={(e) => setPreviousCheckDate(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Previous Check Hours (optional)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={previousCheckHours}
+                        onChange={(e) => setPreviousCheckHours(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-xs font-semibold text-[var(--color-text-soft)]">
+                        Check Rules (Intervals)
+                      </h4>
+                      <button
+                        type="button"
+                        onClick={addCheckRule}
+                        className="text-xs font-semibold text-[var(--color-primary)] hover:text-[var(--color-primary-dark)]"
+                      >
+                        + Add Rule
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {checkRules.map((rule, index) => (
+                        <div key={index} className="grid grid-cols-3 gap-3 items-end">
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-[var(--color-text-soft)]">
+                              Code
+                            </label>
+                            <input
+                              type="text"
+                              value={rule.code}
+                              onChange={(e) => updateCheckRule(index, "code", e.target.value)}
+                              maxLength={1}
+                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-2 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                            />
+                          </div>
+                          <div>
+                            <label className="mb-1 block text-[11px] font-semibold text-[var(--color-text-soft)]">
+                              Interval Hours
+                            </label>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={rule.intervalHours}
+                              onChange={(e) => updateCheckRule(index, "intervalHours", e.target.value)}
+                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-2 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {checkRules.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeCheckRule(index)}
+                                className="h-9 rounded-lg border-2 border-red-500 bg-white px-3 text-xs font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white"
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[11px] text-[var(--color-text-soft)]">
+                      Threshold hours for statuses (Approaching / Issue Required / Critical) will be
+                      auto-calculated from each interval.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button
+                      type="submit"
+                      disabled={
+                        createEquipment.isPending ||
+                        !equipmentNumber.trim() ||
+                        !avgHours ||
+                        !currentHours
+                      }
+                      className="flex-1 rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {createEquipment.isPending ? "Creating..." : "Create Equipment"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowEquipmentCreateModal(false)}
+                      className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}
@@ -7575,53 +7875,118 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                 )}
               </Card>
 
+              <Card title="Bulk Import Previous Year Final Check For Planning">
+                {canAdmin ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-[var(--color-text)]">Template</p>
+                        <p className="text-xs text-[var(--color-text-soft)]">
+                          Download the template, fill it with last year&apos;s final check data, then upload it here. Columns: equipmentNumber, lastYearCheckCode, lastYearCheckDate, lastYearCheckHours
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => window.open(apiPath("/api/entries/history-import/template?format=xlsx"), "_blank")}
+                          className="rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg"
+                        >
+                          Download XLSX Template
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => window.open(apiPath("/api/entries/history-import/template?format=csv"), "_blank")}
+                          className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-xs font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
+                        >
+                          Download CSV Template
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md space-y-3">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-[var(--color-text)]">Upload filled template</p>
+                          <p className="text-xs text-[var(--color-text-soft)]">Supported: .xlsx or .csv</p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!historyImportFile || historyImportBusy}
+                          onClick={async () => {
+                            if (!historyImportFile) return;
+                            setHistoryImportBusy(true);
+                            setHistoryImportResult(null);
+                            try {
+                              const fd = new FormData();
+                              fd.append("file", historyImportFile);
+                              const res = await fetch(apiPath("/api/entries/history-import/import"), {
+                                method: "POST",
+                                body: fd,
+                              });
+                              const payload = await res.json();
+                              if (!res.ok) {
+                                const msg =
+                                  payload?.error?.message ||
+                                  payload?.message ||
+                                  "Import failed";
+                                toast.error(msg);
+                                if (payload?.errors) {
+                                  setHistoryImportResult(payload);
+                                }
+                                return;
+                              }
+                              setHistoryImportResult(payload);
+                              toast.success(`Imported: ${payload.created} created, ${payload.updated} updated`);
+                            } catch (e) {
+                              toast.error(e instanceof Error ? e.message : "Import failed");
+                            } finally {
+                              setHistoryImportBusy(false);
+                            }
+                          }}
+                          className="rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {historyImportBusy ? "Importing..." : "Import"}
+                        </button>
+                      </div>
+
+                      <input
+                        type="file"
+                        accept=".xlsx,.csv"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] ?? null;
+                          setHistoryImportFile(f);
+                          setHistoryImportResult(null);
+                        }}
+                        className="block w-full text-xs"
+                      />
+
+                      {historyImportResult && (
+                        <div className="rounded-lg border border-[var(--color-surface-strong)] bg-white p-3 space-y-2">
+                          <p className="text-xs font-bold text-[var(--color-text)]">
+                            Result: {historyImportResult.validRows}/{historyImportResult.totalRows} valid, {historyImportResult.created} created, {historyImportResult.updated} updated, {historyImportResult.errorCount} errors
+                          </p>
+                          {historyImportResult.errors?.length > 0 && (
+                            <div className="max-h-40 overflow-y-auto text-xs">
+                              {historyImportResult.errors.slice(0, 200).map((err, idx) => (
+                                <div key={idx} className="flex gap-2">
+                                  <span className="font-bold text-red-600">Row {err.row}:</span>
+                                  <span>{err.message}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Admin access required</p>
+                )}
+              </Card>
+
               <Card title="System Configuration">
                 {canAdmin ? (
                   <div className="space-y-6">
-                    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
-                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Reminder Hours Before Due</label>
-                      <p className="mb-3 text-xs text-[var(--color-text-soft)]">
-                        Configure the number of hours before a maintenance check is due when reminders should start appearing. This applies to all equipment checks.
-                      </p>
-                      <div className="flex gap-3">
-                        <input
-                          type="number"
-                          min={1}
-                          max={10000}
-                          step={1}
-                          value={reminderHours}
-                          onChange={(e) => setReminderHours(e.target.value)}
-                          className="h-12 flex-1 rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 text-sm font-medium outline-none transition-all focus:border-[var(--color-primary)] focus:ring-4 focus:ring-[var(--color-primary)]/20 shadow-sm"
-                          placeholder="120"
-                        />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateSystemConfig.mutate(
-                              { reminderHoursBefore: Number(reminderHours) },
-                              {
-                                onSuccess: () => {
-                                  toast.success("Reminder hours configuration updated successfully");
-                                },
-                                onError: (error) => {
-                                  toast.error(error instanceof Error ? error.message : "Failed to update configuration");
-                                },
-                              }
-                            )
-                          }
-                          disabled={!reminderHours || Number(reminderHours) < 1 || Number(reminderHours) > 10000 || systemConfig.isLoading}
-                          className="rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-6 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {systemConfig.isLoading ? "Saving..." : "Save"}
-                        </button>
-                      </div>
-                      {systemConfig.data && (
-                        <p className="mt-2 text-xs font-medium text-[var(--color-text-soft)]">
-                          Current value: {systemConfig.data.reminderHoursBefore} hours
-                        </p>
-                      )}
-                    </div>
-
                     <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
                       <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Email Notifications</label>
                       <p className="mb-3 text-xs text-[var(--color-text-soft)]">

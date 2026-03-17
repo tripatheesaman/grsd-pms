@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { CheckStatus } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
+import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
@@ -16,6 +17,21 @@ function csvEscape(value: unknown) {
     return `"${stringValue.replace(/"/g, "\"\"")}"`;
   }
   return stringValue;
+}
+
+function isoWeek(date: Date) {
+  const value = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNumber = value.getUTCDay() || 7;
+  value.setUTCDate(value.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(value.getUTCFullYear(), 0, 1));
+  return Math.ceil((((value.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+}
+
+function startOfIsoWeek(date: Date) {
+  const value = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNumber = value.getUTCDay() || 7;
+  value.setUTCDate(value.getUTCDate() + 1 - dayNumber);
+  return value;
 }
 
 export async function GET(request: Request) {
@@ -56,6 +72,20 @@ export async function GET(request: Request) {
     }
   }
 
+  const currentYear = new Date().getUTCFullYear();
+  const yearFrom = dateFrom ? dateFrom.getUTCFullYear() : currentYear;
+  const yearTo = dateTo ? dateTo.getUTCFullYear() : yearFrom;
+  const years: number[] = [];
+  for (let y = Math.min(yearFrom, yearTo); y <= Math.max(yearFrom, yearTo); y += 1) {
+    if (y >= 2000 && y <= 2100) years.push(y);
+  }
+
+  if (!dateFrom && !dateTo && years.length > 0) {
+    const y = years[0];
+    dateFrom = new Date(Date.UTC(y, 0, 1, 0, 0, 0, 0));
+    dateTo = new Date(Date.UTC(y, 11, 31, 23, 59, 59, 999));
+  }
+
   const where: any = {};
 
   if (dateFrom || dateTo) {
@@ -79,39 +109,91 @@ export async function GET(request: Request) {
     };
   }
 
+  const equipmentsToSync = await prisma.equipment.findMany({
+    where: {
+      isActive: true,
+      ...(equipmentFrom || equipmentTo
+        ? {
+            equipmentNumber: {
+              ...(equipmentFrom ? { gte: equipmentFrom } : {}),
+              ...(equipmentTo ? { lte: equipmentTo } : {}),
+            },
+          }
+        : {}),
+    },
+    select: { id: true, equipmentNumber: true, displayName: true },
+    orderBy: { equipmentNumber: "asc" },
+  });
+
+  const batchSize = 10;
+  for (let i = 0; i < equipmentsToSync.length; i += batchSize) {
+    const batch = equipmentsToSync.slice(i, i + batchSize);
+    for (const year of years) {
+      await Promise.all(batch.map((e) => syncEquipmentPlan(e.id, year)));
+    }
+  }
+
   if (mode === "pictorial" || format === "html") {
-    const sheets = await prisma.checkSheet.findMany({
-      where: {
-        ...where,
-        status: {
-          in: [
-            CheckStatus.PREDICTED,
-            CheckStatus.ISSUE_REQUIRED,
-            CheckStatus.NEAR_DUE,
-            CheckStatus.OVERDUE,
-          ],
-        },
-      },
-      select: {
-        checkCode: true,
-        dueDate: true,
-        dueHours: true,
-        status: true,
-        equipment: {
-          select: {
-            equipmentNumber: true,
-            displayName: true,
+    const pictorialData: Array<{
+      equipmentNumber: string;
+      displayName: string;
+      checkCode: string;
+      dueDate: Date;
+      dueHours: number;
+      status: CheckStatus;
+    }> = [];
+
+    for (const eq of equipmentsToSync) {
+      const sheets = await prisma.checkSheet.findMany({
+        where: {
+          equipmentId: eq.id,
+          ...(where.dueDate
+            ? {
+                dueDate: where.dueDate,
+              }
+            : {}),
+          status: {
+            in: [
+              CheckStatus.PREDICTED,
+              CheckStatus.ISSUE_REQUIRED,
+              CheckStatus.NEAR_DUE,
+              CheckStatus.OVERDUE,
+            ],
           },
         },
-      },
-      orderBy: [
-        { equipment: { equipmentNumber: "asc" } },
-        { dueDate: "asc" },
-        { checkCode: "asc" },
-      ],
-    });
+        select: {
+          checkCode: true,
+          dueDate: true,
+          dueHours: true,
+          status: true,
+        },
+        orderBy: [
+          { dueDate: "asc" },
+          { checkCode: "asc" },
+        ],
+      });
 
-    const equipmentCount = new Set(sheets.map((s) => s.equipment.equipmentNumber)).size;
+      const seenByWeek = new Set<string>();
+      for (const s of sheets) {
+        const week = isoWeek(s.dueDate);
+        const key = `${eq.id}:${s.checkCode}:${week}`;
+        if (seenByWeek.has(key)) {
+          continue;
+        }
+        seenByWeek.add(key);
+        const weekDate = startOfIsoWeek(s.dueDate);
+        pictorialData.push({
+          equipmentNumber: eq.equipmentNumber,
+          displayName: eq.displayName,
+          checkCode: s.checkCode,
+          dueDate: weekDate,
+          dueHours: Number(s.dueHours),
+          status: s.status,
+        });
+      }
+    }
+
+    const equipmentCount = new Set(pictorialData.map((s) => s.equipmentNumber)).size;
     if (equipmentCount > 200) {
       return NextResponse.json(
         { error: { code: "TOO_LARGE", message: "Too many equipments for pictorial export. Please provide an equipment range." } },
@@ -125,22 +207,24 @@ export async function GET(request: Request) {
     >();
     const equipmentName = new Map<string, string>();
 
-    for (const sheet of sheets) {
-      const eqNo = sheet.equipment.equipmentNumber;
+    for (const sheet of pictorialData) {
+      const eqNo = sheet.equipmentNumber;
       if (!byEquipment.has(eqNo)) {
         byEquipment.set(eqNo, []);
       }
       byEquipment.get(eqNo)!.push({
         dueDate: sheet.dueDate,
         checkCode: sheet.checkCode,
-        dueHours: Number(sheet.dueHours),
+        dueHours: sheet.dueHours,
         status: sheet.status,
       });
-      equipmentName.set(eqNo, sheet.equipment.displayName);
+      equipmentName.set(eqNo, sheet.displayName);
     }
 
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const equipmentKeys = [...byEquipment.keys()].sort((a, b) => a.localeCompare(b));
+    const equipmentKeys = [...byEquipment.keys()].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }),
+    );
 
     const html = `<!doctype html>
 <html lang="en">
@@ -177,7 +261,7 @@ th{background:#f7f9fe;font-size:12px;text-align:left}
 <div class="wrap">
 <div class="card">
 <p class="title">Maintenance Plan Report</p>
-<p class="sub">Format: 09 A 800.00 is Date, Check Code, Scheduled Hrs/Kms</p>
+<p class="sub"><b>Format:</b> <b>09</b> <b>A</b> <b>800.00</b> means <b>Day-of-month</b>, <b>Check Code</b>, <b>Scheduled Hrs/Kms</b></p>
 </div>
 ${equipmentKeys
   .map((eqNo) => {
@@ -270,11 +354,21 @@ ${equipmentKeys
     ],
   });
 
+  sheets.sort((a, b) => {
+    const aEq = a.equipment.equipmentNumber;
+    const bEq = b.equipment.equipmentNumber;
+    const eqCmp = aEq.localeCompare(bEq, undefined, { numeric: true, sensitivity: "base" });
+    if (eqCmp !== 0) return eqCmp;
+    const dCmp = a.dueDate.getTime() - b.dueDate.getTime();
+    if (dCmp !== 0) return dCmp;
+    return a.checkCode.localeCompare(b.checkCode, undefined, { numeric: true, sensitivity: "base" });
+  });
+
   const header = [
     "EquipmentNumber",
     "CheckCode",
-    "PredictedDate",
-    "ScheduledHours",
+    "PredictedDate(YYYY-MM-DD)",
+    "ScheduledHours(0.00)",
   ].join(",");
 
   const rows = sheets.map((sheet) => {
@@ -282,7 +376,7 @@ ${equipmentKeys
     return [
       csvEscape(s.equipment?.equipmentNumber ?? ""),
       csvEscape(s.checkCode ?? ""),
-      csvEscape(s.dueDate.toISOString()),
+      csvEscape(s.dueDate.toISOString().slice(0, 10)),
       csvEscape(Number(s.dueHours).toFixed(2)),
     ].join(",");
   });

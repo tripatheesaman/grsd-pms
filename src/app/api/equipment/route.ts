@@ -39,6 +39,7 @@ const createEquipmentSchema = z.object({
   checkRules: z.array(ruleSchema).min(1).max(26),
   previousCheckCode: z.string().regex(/^[A-Z]$/).optional(),
   previousCheckDate: z.string().optional(),
+  previousCheckHours: z.number().nonnegative().optional(),
 });
 
 export async function GET() {
@@ -128,10 +129,10 @@ export async function POST(request: Request) {
   }
 
   if (
-    (parsed.data.previousCheckCode && !parsed.data.previousCheckDate) ||
-    (!parsed.data.previousCheckCode && parsed.data.previousCheckDate)
+    (parsed.data.previousCheckCode || parsed.data.previousCheckDate || parsed.data.previousCheckHours !== undefined) &&
+    !(parsed.data.previousCheckCode && parsed.data.previousCheckDate && parsed.data.previousCheckHours !== undefined)
   ) {
-    return fail("BAD_REQUEST", "Previous check code and date must be provided together", 400);
+    return fail("BAD_REQUEST", "Previous check code, date, and hours must all be provided together", 400);
   }
 
   if (parsed.data.previousCheckCode) {
@@ -171,25 +172,26 @@ export async function POST(request: Request) {
     },
   });
 
-  if (parsed.data.previousCheckCode && parsed.data.previousCheckDate) {
+  if (parsed.data.previousCheckCode && parsed.data.previousCheckDate && parsed.data.previousCheckHours !== undefined) {
     const previousCheckRule = equipment.checkRules.find(
       (rule) => rule.code === parsed.data.previousCheckCode
     );
 
     if (previousCheckRule) {
       const previousCheckDate = new Date(`${parsed.data.previousCheckDate}T00:00:00.000Z`);
-      const dueHours = previousCheckRule.intervalHours;
+      const completedHours = parsed.data.previousCheckHours;
 
       await prisma.checkSheet.create({
         data: {
           equipmentId: equipment.id,
           checkRuleId: previousCheckRule.id,
           checkCode: previousCheckRule.code,
-          dueHours,
+          dueHours: completedHours,
           dueDate: previousCheckDate,
           triggerType: "HOURS",
           status: CheckStatus.COMPLETED,
           completedAt: previousCheckDate,
+          completedHours,
         },
       });
     }

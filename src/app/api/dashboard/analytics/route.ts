@@ -4,6 +4,8 @@ import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
+const STATUS_START_DATE = new Date("2026-04-01T00:00:00.000Z");
+
 export async function GET() {
   const access = await requireAccess({
     minRole: "USER",
@@ -23,7 +25,14 @@ export async function GET() {
 
   const [equipmentCount, activeAlerts, todayEntries, checksDueSoon, unreadNotifications, overdueEscalations] = await Promise.all([
     prisma.equipment.count({ where: { isActive: true } }),
-    prisma.alert.count({ where: { acknowledged: false } }),
+    prisma.alert.count({
+      where: {
+        acknowledged: false,
+        createdAt: {
+          gte: STATUS_START_DATE,
+        },
+      },
+    }),
     prisma.dailyEntry.count({
       where: {
         entryDate: {
@@ -39,6 +48,7 @@ export async function GET() {
         },
         dueDate: {
           lte: soon,
+          gte: STATUS_START_DATE,
         },
       },
     }),
@@ -48,11 +58,17 @@ export async function GET() {
         status: {
           not: "READ",
         },
+        createdAt: {
+          gte: STATUS_START_DATE,
+        },
       },
     }),
     prisma.checkSheet.count({
       where: {
         status: CheckStatus.OVERDUE,
+        dueDate: {
+          gte: STATUS_START_DATE,
+        },
       },
     }),
   ]);

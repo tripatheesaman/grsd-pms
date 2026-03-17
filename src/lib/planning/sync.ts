@@ -24,6 +24,8 @@ let systemConfigCache: {
 
 const CONFIG_CACHE_TTL = 60000;
 
+const ALERT_START_DATE = new Date("2026-04-01T00:00:00.000Z");
+
 async function getSystemThresholds() {
   const now = Date.now();
   if (systemConfigCache && (now - systemConfigCache.timestamp) < CONFIG_CACHE_TTL) {
@@ -68,6 +70,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
         select: {
           completedAt: true,
           dueHours: true,
+          completedHours: true,
         },
       },
     },
@@ -92,20 +95,42 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
   });
 
   const lastCompletedCheck = equipment.checkSheets[0];
-  const anchorDate =
-    lastCompletedCheck?.completedAt ??
-    equipment.commissionedAt ??
-    new Date();
 
-  const historicalDailyHours = allEntries.map((item) => Number(item.hoursRun));
+  const baselineDate = equipment.planningBaselineCheckDate ?? null;
+  const baselineHours = equipment.planningBaselineHours != null ? Number(equipment.planningBaselineHours) : null;
+
+  let anchorDate: Date;
+  let startHours: number;
+
+  if (lastCompletedCheck && lastCompletedCheck.completedAt) {
+    anchorDate =
+      lastCompletedCheck.completedAt ??
+      equipment.commissionedAt ??
+      new Date();
+    startHours = Number(lastCompletedCheck.completedHours ?? lastCompletedCheck.dueHours);
+  } else if (baselineDate && baselineHours != null) {
+    anchorDate = baselineDate;
+    startHours = baselineHours;
+  } else {
+    anchorDate =
+      equipment.commissionedAt ??
+      new Date();
+    startHours = Number(equipment.currentHours);
+  }
+
+  const historicalDailyHours: number[] = [];
+  for (let i = 1; i < allEntries.length; i += 1) {
+    const prev = Number(allEntries[i - 1]?.hoursRun);
+    const curr = Number(allEntries[i]?.hoursRun);
+    const delta = curr - prev;
+    if (Number.isFinite(delta) && delta > 0) {
+      historicalDailyHours.push(delta);
+    }
+  }
   const forecastAverage = deriveForecastAverageHoursPerDay({
     latestAverage: Number(equipment.averageHoursPerDay),
     historicalDailyHours,
   });
-
-  const startHours = lastCompletedCheck
-    ? Number(lastCompletedCheck.dueHours)
-    : Number(equipment.currentHours);
 
   const thresholds = await getSystemThresholds();
 
@@ -128,6 +153,9 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     checkCode: p.checkCode,
     dueHours: p.dueHours,
   }));
+
+  const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
+  const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
 
   const existingSheets = await prisma.checkSheet.findMany({
     where: {
@@ -209,59 +237,85 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
 
   const updateAverage = Math.abs(forecastAverage - Number(equipment.averageHoursPerDay)) >= 0.01;
 
-  await prisma.$transaction(async (tx) => {
-    if (updateAverage) {
-      await tx.equipment.update({
-        where: { id: equipmentId },
-        data: { averageHoursPerDay: forecastAverage },
-      });
-    }
+  if (updateAverage) {
+    await prisma.equipment.update({
+      where: { id: equipmentId },
+      data: { averageHoursPerDay: forecastAverage },
+    });
+  }
 
-    if (toCreate.length > 0) {
-      await tx.checkSheet.createMany({
-        data: toCreate,
-        skipDuplicates: true,
-      });
-    }
+  if (toCreate.length > 0) {
+    await prisma.checkSheet.createMany({
+      data: toCreate,
+      skipDuplicates: true,
+    });
+  }
 
-    if (toUpdatePreserve.length > 0) {
-      await Promise.all(
-        toUpdatePreserve.map((item) =>
-          tx.checkSheet.update({
-            where: { id: item.id },
-            data: {
-              checkRuleId: item.checkRuleId,
-              dueDate: item.dueDate,
-              triggerType: item.triggerType,
-            },
-          })
-        )
-      );
-    }
+  if (toUpdatePreserve.length > 0) {
+    await Promise.all(
+      toUpdatePreserve.map((item) =>
+        prisma.checkSheet.update({
+          where: { id: item.id },
+          data: {
+            checkRuleId: item.checkRuleId,
+            dueDate: item.dueDate,
+            triggerType: item.triggerType,
+          },
+        })
+      )
+    );
+  }
 
-    if (toUpdateStatus.length > 0) {
-      await Promise.all(
-        toUpdateStatus.map((item) =>
-          tx.checkSheet.update({
-            where: { id: item.id },
-            data: {
-              checkRuleId: item.checkRuleId,
-              dueDate: item.dueDate,
-              triggerType: item.triggerType,
-              status: item.status,
-            },
-          })
-        )
-      );
-    }
-  });
+  if (toUpdateStatus.length > 0) {
+    await Promise.all(
+      toUpdateStatus.map((item) =>
+        prisma.checkSheet.update({
+          where: { id: item.id },
+          data: {
+            checkRuleId: item.checkRuleId,
+            dueDate: item.dueDate,
+            triggerType: item.triggerType,
+            status: item.status,
+          },
+        })
+      )
+    );
+  }
 
-  await prisma.alert.deleteMany({
+  await prisma.checkSheet.deleteMany({
     where: {
       equipmentId,
-      acknowledged: false,
+      dueDate: {
+        gte: yearStart,
+        lte: yearEnd,
+      },
+      status: {
+        in: [
+          CheckStatus.PREDICTED,
+          CheckStatus.ISSUE_REQUIRED,
+          CheckStatus.NEAR_DUE,
+          CheckStatus.OVERDUE,
+        ],
+      },
+      NOT: {
+        OR: planKeys.map((k) => ({
+          checkCode: k.checkCode,
+          dueHours: k.dueHours,
+        })),
+      },
     },
   });
+
+  const now = new Date();
+
+  if (now >= ALERT_START_DATE) {
+    await prisma.alert.deleteMany({
+      where: {
+        equipmentId,
+        acknowledged: false,
+      },
+    });
+  }
 
   const freshSheets = await prisma.checkSheet.findMany({
     where: {
@@ -283,7 +337,6 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     },
   });
 
-  const now = new Date();
   const currentHours = Number(equipment.currentHours);
 
   const statusUpdates: Array<{
@@ -338,7 +391,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     },
   });
 
-  if (finalSheets.length > 0) {
+  if (now >= ALERT_START_DATE && finalSheets.length > 0) {
     await prisma.alert.createMany({
       data: finalSheets.map((sheet) => ({
         equipmentId,

@@ -8,6 +8,8 @@ import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
+const MAX_HOURS_RUN = 1_000_000;
+
 const approveDaySchema = z.object({
   entryDate: z.string().date(),
 });
@@ -99,7 +101,6 @@ export async function POST(request: Request) {
         { equipmentId: "asc" },
         { entryDate: "asc" },
       ],
-      take: equipmentIds.length * 45,
     }),
   ]);
 
@@ -116,7 +117,13 @@ export async function POST(request: Request) {
   );
 
   const recentEntriesMap = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
+  const recentCounts = new Map<string, number>();
   for (const entry of allRecentEntries) {
+    const current = recentCounts.get(entry.equipmentId) ?? 0;
+    if (current >= 45) {
+      continue;
+    }
+    recentCounts.set(entry.equipmentId, current + 1);
     if (!recentEntriesMap.has(entry.equipmentId)) {
       recentEntriesMap.set(entry.equipmentId, []);
     }
@@ -128,19 +135,16 @@ export async function POST(request: Request) {
 
   const validEntries = pendingEntries.filter((entry) => {
     const previousEntry = previousMap.get(entry.equipmentId);
-    const hasAnyApprovedEntries = approvedCountMap.get(entry.equipmentId) ?? false;
-    const previousHours = previousEntry
-      ? Number(previousEntry.hoursRun)
-      : hasAnyApprovedEntries
-        ? 0
-        : Number(entry.equipment.currentHours);
+    const previousHours = previousEntry ? Number(previousEntry.hoursRun) : 0;
 
-    return Number(entry.hoursRun) >= previousHours;
+    const hoursRun = Number(entry.hoursRun);
+    if (!Number.isFinite(hoursRun) || hoursRun <= 0 || hoursRun > MAX_HOURS_RUN) {
+      return false;
+    }
+    return hoursRun >= previousHours;
   });
 
-  if (validEntries.length === 0) {
-    return fail("BAD_REQUEST", "No valid entries to approve for this date", 400);
-  }
+  const invalidCount = pendingEntries.length - validEntries.length;
 
   const equipmentUpdates = new Map<string, { averageHoursPerDay: number; currentHours: number }>();
   const entryUpdates: Array<{ id: string; equipmentId: string }> = [];
@@ -148,12 +152,7 @@ export async function POST(request: Request) {
 
   for (const entry of validEntries) {
     const previousEntry = previousMap.get(entry.equipmentId);
-    const hasAnyApprovedEntries = approvedCountMap.get(entry.equipmentId) ?? false;
-    const previousHours = previousEntry
-      ? Number(previousEntry.hoursRun)
-      : hasAnyApprovedEntries
-        ? 0
-        : Number(entry.equipment.currentHours);
+    const previousHours = previousEntry ? Number(previousEntry.hoursRun) : 0;
 
     const recentEntries = recentEntriesMap.get(entry.equipmentId) ?? [];
     const sortedWithNew = [
@@ -162,16 +161,19 @@ export async function POST(request: Request) {
     ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
     const dailyDeltas: number[] = [];
-    let prevCumulative = previousHours;
-    for (const item of sortedWithNew) {
-      const delta = Math.max(0, item.hours - prevCumulative);
-      if (delta > 0) {
-        dailyDeltas.push(delta);
+    let prevCumulative = previousEntry ? Number(previousEntry.hoursRun) : (sortedWithNew[0]?.hours ?? 0);
+    for (let i = 0; i < sortedWithNew.length; i += 1) {
+      const item = sortedWithNew[i];
+      if (i === 0 && !previousEntry) {
+        prevCumulative = item.hours;
+        continue;
       }
+      const delta = Math.max(0, item.hours - prevCumulative);
+      if (delta > 0) dailyDeltas.push(delta);
       prevCumulative = item.hours;
     }
 
-    const dailyIncrementForNew = Math.max(0, Number(entry.hoursRun) - previousHours);
+    const dailyIncrementForNew = previousEntry ? Math.max(0, Number(entry.hoursRun) - previousHours) : 0;
     const newAverage = deriveForecastAverageHoursPerDay({
       latestAverage: Number(entry.equipment.averageHoursPerDay),
       historicalDailyHours: dailyDeltas,
@@ -204,56 +206,54 @@ export async function POST(request: Request) {
     equipmentIdsToSync.add(entry.equipmentId);
   }
 
-  await prisma.$transaction(async (tx) => {
-    await Promise.all(
-      entryUpdates.map((item) =>
-        tx.dailyEntry.update({
-          where: { id: item.id },
-          data: {
-            status: EntryStatus.APPROVED,
-            approvedById: access.user.id,
-            approvedAt: new Date(),
-          },
-        })
-      )
-    );
+  const approvedAt = new Date();
+  const idsToApprove = entryUpdates.map((e) => e.id);
 
-    await Promise.all(
-      Array.from(equipmentUpdates.entries()).map(([equipmentId, data]) =>
-        tx.equipment.update({
-          where: { id: equipmentId },
-          data: {
-            averageHoursPerDay: data.averageHoursPerDay,
-            currentHours: data.currentHours,
-          },
-        })
-      )
-    );
-  });
-
-  await Promise.all(
-    Array.from(equipmentIdsToSync).map((equipmentId) =>
-      syncEquipmentPlan(equipmentId, new Date().getFullYear())
-    )
-  );
-
-  await Promise.all(
-    entryUpdates.map((item) =>
-      writeAuditLog({
-        userId: access.user.id,
-        action: "equipment.entry.approve.batch",
-        entityType: "DailyEntry",
-        entityId: item.id,
-        payload: {
-          batchDate: day.toISOString(),
+  if (idsToApprove.length > 0) {
+    await prisma.$transaction(async (tx) => {
+      await tx.dailyEntry.updateMany({
+        where: { id: { in: idsToApprove } },
+        data: {
+          status: EntryStatus.APPROVED,
+          approvedById: access.user.id,
+          approvedAt,
         },
-        request,
-      })
-    )
-  );
+      });
+
+      await Promise.all(
+        Array.from(equipmentUpdates.entries()).map(([equipmentId, data]) =>
+          tx.equipment.update({
+            where: { id: equipmentId },
+            data: {
+              averageHoursPerDay: data.averageHoursPerDay,
+              currentHours: data.currentHours,
+            },
+          })
+        )
+      );
+    });
+  }
+
+  for (const equipmentId of equipmentIdsToSync) {
+    syncEquipmentPlan(equipmentId, new Date().getFullYear()).catch(() => null);
+  }
+
+  writeAuditLog({
+    userId: access.user.id,
+    action: "equipment.entry.approve.batch",
+    entityType: "DailyEntry",
+    entityId: null,
+    payload: {
+      batchDate: day.toISOString(),
+      approvedCount: idsToApprove.length,
+      invalidCount,
+    },
+    request,
+  }).catch(() => null);
 
   return ok({
-    approvedCount: validEntries.length,
+    approvedCount: idsToApprove.length,
+    invalidCount,
     date: day.toISOString(),
   });
 }
