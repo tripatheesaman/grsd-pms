@@ -54,12 +54,21 @@ type CreateEquipmentInput = {
   }>;
   previousCheckCode?: string;
   previousCheckDate?: string;
+   previousCheckHours?: number;
 };
 
 type CreateEntryInput = {
   equipmentId: string;
   entryDate: string;
   hoursRun: number;
+};
+
+type BulkEntryInput = {
+  entryDate: string;
+  items: Array<{
+    equipmentId: string;
+    hoursRun: number;
+  }>;
 };
 
 type UserItem = {
@@ -263,7 +272,6 @@ export function useForecastDrift() {
 }
 
 type SystemConfig = {
-  reminderHoursBefore: number;
   approachingOffsetHours: number;
   issueOffsetHours: number;
   nearOffsetHours: number;
@@ -293,7 +301,6 @@ export function useUpdateSystemConfig() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: {
-      reminderHoursBefore?: number;
       approachingOffsetHours?: number;
       issueOffsetHours?: number;
       nearOffsetHours?: number;
@@ -425,8 +432,24 @@ export function useApproveEntriesByDate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (entryDate: string) =>
-      apiPost<{ approvedCount: number; date: string }>(
+      apiPost<{ approvedCount: number; invalidCount?: number; date: string }>(
         "/api/entries/approve-day",
+        { entryDate },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["entries"] });
+      queryClient.invalidateQueries({ queryKey: ["equipments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+    },
+  });
+}
+
+export function useRejectEntriesByDate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (entryDate: string) =>
+      apiPost<{ rejectedCount: number; date: string }>(
+        "/api/entries/reject-day",
         { entryDate },
       ),
     onSuccess: () => {
@@ -496,6 +519,23 @@ export function useCreateEntry() {
           entryDate: payload.entryDate,
           hoursRun: payload.hoursRun,
         },
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["equipment", "list"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+      queryClient.invalidateQueries({ queryKey: ["alerts"] });
+      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
+    },
+  });
+}
+
+export function useCreateEntriesBulk() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: BulkEntryInput) =>
+      apiPost<{ createdCount: number; failed: { equipmentId: string; message: string }[] }>(
+        "/api/entries/bulk",
+        payload,
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["equipment", "list"] });

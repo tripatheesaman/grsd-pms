@@ -8,9 +8,11 @@ import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
+const MAX_HOURS_RUN = 1_000_000;
+
 const entrySchema = z.object({
   entryDate: z.string().datetime(),
-  hoursRun: z.number().positive(),
+  hoursRun: z.number().positive().max(MAX_HOURS_RUN),
 });
 
 type RouteContext = {

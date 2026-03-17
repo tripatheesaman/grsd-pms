@@ -4,6 +4,8 @@ import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
+const NOTIFICATION_START_DATE = new Date("2026-04-01T00:00:00.000Z");
+
 export async function GET() {
   const access = await requireAccess({
     minRole: "USER",
@@ -16,6 +18,9 @@ export async function GET() {
   const notifications = await prisma.notification.findMany({
     where: {
       OR: [{ userId: access.user.id }, { userId: null }],
+      createdAt: {
+        gte: NOTIFICATION_START_DATE,
+      },
     },
     orderBy: {
       createdAt: "desc",

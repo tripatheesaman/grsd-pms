@@ -3,6 +3,8 @@ import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
+const ALERT_START_DATE = new Date("2026-04-01T00:00:00.000Z");
+
 export async function GET() {
   const access = await requireAccess({
     minRole: "USER",
@@ -15,6 +17,9 @@ export async function GET() {
   const alerts = await prisma.alert.findMany({
     where: {
       acknowledged: false,
+      createdAt: {
+        gte: ALERT_START_DATE,
+      },
     },
     include: {
       equipment: {

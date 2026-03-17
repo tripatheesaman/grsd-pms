@@ -129,6 +129,9 @@ model Equipment {
   commissionedAt     DateTime?
   isActive           Boolean        @default(true)
   usageUnit          UsageUnit      @default(HOURS)
+  planningBaselineCheckCode String?
+  planningBaselineCheckDate DateTime?
+  planningBaselineHours     Decimal?      @db.Decimal(12, 2)
   checkRules         CheckRule[]
   entries            DailyEntry[]
   checkSheets        CheckSheet[]

@@ -81,14 +81,14 @@ export async function PATCH(request: Request, context: RouteContext) {
     }),
   ]);
 
-  const previousHours = previousEntry
-    ? Number(previousEntry.hoursRun)
-    : hasAnyApprovedEntries > 0
-      ? 0
-      : Number(entry.equipment.currentHours);
+  const previousHoursForValidation = previousEntry ? Number(previousEntry.hoursRun) : 0;
 
-  if (Number(entry.hoursRun) < previousHours) {
-    return fail("BAD_REQUEST", `Hours must be at least ${previousHours.toFixed(2)} (previous entry hours)`, 400);
+  if (Number(entry.hoursRun) < previousHoursForValidation) {
+    return fail(
+      "BAD_REQUEST",
+      `Hours must be at least ${previousHoursForValidation.toFixed(2)} (previous entry hours)`,
+      400,
+    );
   }
 
   const sortedWithNew = [
@@ -97,16 +97,21 @@ export async function PATCH(request: Request, context: RouteContext) {
   ].sort((a, b) => a.date.getTime() - b.date.getTime());
 
   const dailyDeltas: number[] = [];
-  let prevCumulative = previousHours;
-  for (const item of sortedWithNew) {
-    const delta = Math.max(0, item.hours - prevCumulative);
-    if (delta > 0) {
-      dailyDeltas.push(delta);
+  let prevCumulative = previousEntry ? Number(previousEntry.hoursRun) : (sortedWithNew[0]?.hours ?? 0);
+  for (let i = 0; i < sortedWithNew.length; i += 1) {
+    const item = sortedWithNew[i];
+    if (i === 0 && !previousEntry) {
+      prevCumulative = item.hours;
+      continue;
     }
+    const delta = Math.max(0, item.hours - prevCumulative);
+    if (delta > 0) dailyDeltas.push(delta);
     prevCumulative = item.hours;
   }
 
-  const dailyIncrementForNew = Math.max(0, Number(entry.hoursRun) - previousHours);
+  const dailyIncrementForNew = previousEntry
+    ? Math.max(0, Number(entry.hoursRun) - Number(previousEntry.hoursRun))
+    : 0;
 
   const newAverage = deriveForecastAverageHoursPerDay({
     latestAverage: Number(entry.equipment.averageHoursPerDay),

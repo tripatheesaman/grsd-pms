@@ -105,9 +105,7 @@ export async function GET(_: Request, context: RouteContext) {
   const equipmentNumberIsNumeric =
     Number.isFinite(equipmentNumberAsInt) && String(equipmentNumberAsInt) === equipment.equipmentNumber.trim();
 
-  // Support both naming conventions:
-  // - Single equipment: 1005_A.pdf (existing behavior)
-  // - Range: 1003-1004_A.pdf (new behavior)
+  
   const checksheetsDir = buildUploadPath("checksheets");
   let rangeTemplates: Array<{ from: number; to: number; code: string; fileName: string }> = [];
   if (equipmentNumberIsNumeric) {
@@ -126,10 +124,10 @@ export async function GET(_: Request, context: RouteContext) {
         })
         .filter(Boolean) as Array<{ from: number; to: number; code: string; fileName: string }>;
 
-      // Prefer the most specific range (smallest span), then lowest start.
+      
       rangeTemplates.sort((a, b) => (a.to - a.from) - (b.to - b.from) || a.from - b.from);
     } catch {
-      // If directory doesn't exist / unreadable, treat as no range templates.
+      
       rangeTemplates = [];
     }
   }

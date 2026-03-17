@@ -16,7 +16,6 @@ export async function GET() {
 
   try {
     const [
-      reminderHours,
       approachingHours,
       issueHours,
       nearHours,
@@ -34,7 +33,6 @@ export async function GET() {
       emailTemplateBody,
       emailReminderDaysBefore,
     ] = await Promise.all([
-      (prisma as any).systemConfig?.findUnique({ where: { key: "reminder_hours_before" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }),
@@ -54,7 +52,6 @@ export async function GET() {
     ]);
 
     return ok({
-      reminderHoursBefore: reminderHours ? Number(reminderHours.value) : 120,
       approachingOffsetHours: approachingHours ? Number(approachingHours.value) : 120,
       issueOffsetHours: issueHours ? Number(issueHours.value) : 40,
       nearOffsetHours: nearHours ? Number(nearHours.value) : 10,
@@ -74,7 +71,6 @@ export async function GET() {
     });
   } catch (error) {
     return ok({
-      reminderHoursBefore: 120,
       approachingOffsetHours: 120,
       issueOffsetHours: 40,
       nearOffsetHours: 10,
@@ -96,7 +92,6 @@ export async function GET() {
 }
 
 const updateConfigSchema = z.object({
-  reminderHoursBefore: z.number().int().positive().max(10000).optional(),
   approachingOffsetHours: z.number().int().nonnegative().max(10000).optional(),
   issueOffsetHours: z.number().int().nonnegative().max(10000).optional(),
   nearOffsetHours: z.number().int().nonnegative().max(10000).optional(),
@@ -131,14 +126,6 @@ export async function PATCH(request: Request) {
 
   try {
     const configs: Array<{ key: string; value: string; description: string }> = [];
-
-    if (parsed.data.reminderHoursBefore !== undefined) {
-      configs.push({
-        key: "reminder_hours_before",
-        value: String(parsed.data.reminderHoursBefore),
-        description: "Hours before maintenance check due date to start showing reminders",
-      });
-    }
 
     if (parsed.data.approachingOffsetHours !== undefined) {
       configs.push({
@@ -309,7 +296,6 @@ export async function PATCH(request: Request) {
     }
 
     const [
-      reminderHours,
       approachingHours,
       issueHours,
       nearHours,
@@ -327,7 +313,6 @@ export async function PATCH(request: Request) {
       emailTemplateBody,
       emailReminderDaysBefore,
     ] = await Promise.all([
-      (prisma as any).systemConfig?.findUnique({ where: { key: "reminder_hours_before" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }),
@@ -347,7 +332,6 @@ export async function PATCH(request: Request) {
     ]);
 
     return ok({
-      reminderHoursBefore: reminderHours ? Number(reminderHours.value) : 120,
       approachingOffsetHours: approachingHours ? Number(approachingHours.value) : 120,
       issueOffsetHours: issueHours ? Number(issueHours.value) : 40,
       nearOffsetHours: nearHours ? Number(nearHours.value) : 10,
