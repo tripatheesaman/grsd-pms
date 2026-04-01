@@ -877,6 +877,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [hoursError, setHoursError] = useState<string | undefined>(undefined);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkEntries, setBulkEntries] = useState<Array<{ equipmentId: string; hours: string; previous: number; error?: string }>>([]);
+  const [showBulkReviewModal, setShowBulkReviewModal] = useState(false);
+  const [bulkReviewEntries, setBulkReviewEntries] = useState<Array<{ equipmentId: string; hours: string; previous: number }>>([]);
+  const [confirmBulkWarnings, setConfirmBulkWarnings] = useState(false);
   const equipmentSearchRef = useRef<HTMLDivElement>(null);
 
   const yearOptions = useMemo(() => {
@@ -998,6 +1001,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [equipmentMgmtSearch, setEquipmentMgmtSearch] = useState("");
   const [equipmentMgmtClassFilter, setEquipmentMgmtClassFilter] = useState("ALL");
   const [equipmentMgmtStatusFilter, setEquipmentMgmtStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [equipmentMgmtDataQualityFilter, setEquipmentMgmtDataQualityFilter] = useState<
+    "ALL" | "AVG_MISSING" | "PREVIOUS_MISSING" | "EITHER_MISSING"
+  >("ALL");
   const [equipmentMgmtSortBy, setEquipmentMgmtSortBy] = useState<"number" | "name" | "hours" | "avgHours">("number");
   const [equipmentMgmtSortOrder, setEquipmentMgmtSortOrder] = useState<"asc" | "desc">("asc");
   const [equipmentMgmtPage, setEquipmentMgmtPage] = useState(1);
@@ -1694,8 +1700,20 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   };
 
   const onBulkSubmit = async () => {
+    if (bulkReviewEntries.length === 0) return;
+    const warningCount = bulkReviewEntries.filter((e) => {
+      const equipment = bulkEquipmentList.find((item) => item.id === e.equipmentId);
+      const avg = Number(equipment?.averageHoursPerDay ?? 0);
+      const delta = Number(e.hours) - Number(e.previous);
+      return Number.isFinite(avg) && avg > 0 && Number.isFinite(delta) && delta > avg;
+    }).length;
+    if (warningCount > 0 && !confirmBulkWarnings) {
+      toast.error("Please confirm warning entries before submission");
+      return;
+    }
+    setShowBulkReviewModal(false);
     if (bulkEntries.length === 0) return;
-    const validEntries = bulkEntries.filter((e) => {
+    const validEntries = bulkReviewEntries.filter((e) => {
       if (!e.equipmentId || !e.hours) return false;
       const value = Number(e.hours);
       if (Number.isNaN(value) || value <= 0) return false;
@@ -1720,6 +1738,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           } out of ${validEntries.length}`,
         );
         setBulkEntries([]);
+        setBulkReviewEntries([]);
+        setConfirmBulkWarnings(false);
       }
       if (result.failed.length > 0) {
         const top = result.failed.slice(0, 3);
@@ -1741,6 +1761,22 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         toast.error("Failed to submit bulk entries");
       }
     }
+  };
+
+  const openBulkReviewModal = () => {
+    const validEntries = bulkEntries.filter((e) => {
+      if (!e.equipmentId || !e.hours) return false;
+      const value = Number(e.hours);
+      if (Number.isNaN(value) || value <= 0) return false;
+      return value >= e.previous;
+    });
+    if (validEntries.length === 0) {
+      toast.error("No valid entries to review");
+      return;
+    }
+    setBulkReviewEntries(validEntries.map((e) => ({ equipmentId: e.equipmentId, hours: e.hours, previous: e.previous })));
+    setConfirmBulkWarnings(false);
+    setShowBulkReviewModal(true);
   };
 
   const handleEquipmentSelect = (equipmentId: string) => {
@@ -2839,7 +2875,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     </div>
                     <button
                       type="button"
-                      onClick={onBulkSubmit}
+                      onClick={openBulkReviewModal}
                       disabled={bulkEntries.length === 0 || bulkEntries.every((e) => {
                         if (!e.equipmentId || !e.hours) return true;
                         const value = Number(e.hours);
@@ -2848,7 +2884,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       })}
                       className="w-full rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-[var(--color-accent)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100"
                     >
-                      Submit All Entries ({bulkEntries.filter((e) => {
+                      Review & Submit ({bulkEntries.filter((e) => {
                         if (!e.equipmentId || !e.hours) return false;
                         const value = Number(e.hours);
                         if (Number.isNaN(value) || value <= 0) return false;
@@ -4936,6 +4972,19 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             <option value="INACTIVE">Inactive</option>
                           </select>
                           <select
+                            value={equipmentMgmtDataQualityFilter}
+                            onChange={(e) => {
+                              setEquipmentMgmtDataQualityFilter(e.target.value as typeof equipmentMgmtDataQualityFilter);
+                              setEquipmentMgmtPage(1);
+                            }}
+                            className="h-9 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                          >
+                            <option value="ALL">All Data Quality</option>
+                            <option value="AVG_MISSING">Avg Hours Missing (0/blank)</option>
+                            <option value="PREVIOUS_MISSING">Previous Check Missing</option>
+                            <option value="EITHER_MISSING">Avg or Previous Missing</option>
+                          </select>
+                          <select
                             value={`${equipmentMgmtSortBy}-${equipmentMgmtSortOrder}`}
                             onChange={(e) => {
                               const [sortBy, sortOrder] = e.target.value.split("-") as [typeof equipmentMgmtSortBy, typeof equipmentMgmtSortOrder];
@@ -5002,6 +5051,15 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             }
                           }
                           if (equipmentMgmtClassFilter !== "ALL" && eq.equipmentClass !== equipmentMgmtClassFilter) {
+                            return false;
+                          }
+                          if (equipmentMgmtDataQualityFilter === "AVG_MISSING" && !eq.isAvgHoursMissing) {
+                            return false;
+                          }
+                          if (equipmentMgmtDataQualityFilter === "PREVIOUS_MISSING" && eq.hasPreviousCheckConfigured) {
+                            return false;
+                          }
+                          if (equipmentMgmtDataQualityFilter === "EITHER_MISSING" && !(eq.isAvgHoursMissing || !eq.hasPreviousCheckConfigured)) {
                             return false;
                           }
                           return true;
@@ -7777,6 +7835,111 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       Cancel
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showBulkReviewModal && (
+            <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowBulkReviewModal(false)}>
+              <div className="relative w-full max-w-4xl rounded-2xl bg-gradient-to-br from-white to-[var(--color-surface)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-lg font-bold text-[var(--color-text)] mb-2">Review Bulk Entries</h3>
+                <p className="text-xs text-[var(--color-text-soft)] mb-4">
+                  Please verify entries before final submission. You can edit or remove rows here.
+                </p>
+                <div className="max-h-[420px] overflow-auto rounded-xl border border-[var(--color-surface-strong)] bg-white">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-[var(--color-surface)] text-left text-xs font-bold uppercase tracking-wide text-[var(--color-text-soft)]">
+                      <tr>
+                        <th className="px-3 py-2">Equipment</th>
+                        <th className="px-3 py-2">Previous</th>
+                        <th className="px-3 py-2">New</th>
+                        <th className="px-3 py-2">Delta</th>
+                        <th className="px-3 py-2">Warning</th>
+                        <th className="px-3 py-2 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkReviewEntries.map((entry, index) => {
+                        const equipment = bulkEquipmentList.find((e) => e.id === entry.equipmentId);
+                        const avg = Number(equipment?.averageHoursPerDay ?? 0);
+                        const newVal = Number(entry.hours);
+                        const delta = newVal - Number(entry.previous);
+                        const hasWarning = Number.isFinite(avg) && avg > 0 && Number.isFinite(delta) && delta > avg;
+                        return (
+                          <tr key={`${entry.equipmentId}-${index}`} className="border-t border-[var(--color-surface-strong)]">
+                            <td className="px-3 py-2 font-semibold">{equipment?.equipmentNumber ?? entry.equipmentId}</td>
+                            <td className="px-3 py-2">{entry.previous.toFixed(2)}</td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                min={entry.previous}
+                                step="0.01"
+                                value={entry.hours}
+                                onChange={(e) =>
+                                  setBulkReviewEntries((prev) =>
+                                    prev.map((item, i) => (i === index ? { ...item, hours: e.target.value } : item)),
+                                  )
+                                }
+                                className="h-8 w-28 rounded-md border border-[var(--color-surface-strong)] px-2 text-xs"
+                              />
+                            </td>
+                            <td className="px-3 py-2 font-semibold">{Number.isFinite(delta) ? delta.toFixed(2) : "-"}</td>
+                            <td className="px-3 py-2">
+                              {hasWarning ? (
+                                <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold text-amber-800">
+                                  Delta &gt; Avg/Day ({avg.toFixed(2)})
+                                </span>
+                              ) : (
+                                <span className="text-xs text-[var(--color-text-soft)]">OK</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right">
+                              <button
+                                type="button"
+                                onClick={() => setBulkReviewEntries((prev) => prev.filter((_, i) => i !== index))}
+                                className="rounded-md border border-red-500 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-500 hover:text-white"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {bulkReviewEntries.some((entry) => {
+                  const equipment = bulkEquipmentList.find((e) => e.id === entry.equipmentId);
+                  const avg = Number(equipment?.averageHoursPerDay ?? 0);
+                  const delta = Number(entry.hours) - Number(entry.previous);
+                  return Number.isFinite(avg) && avg > 0 && Number.isFinite(delta) && delta > avg;
+                }) && (
+                  <label className="mt-4 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                    <input
+                      type="checkbox"
+                      checked={confirmBulkWarnings}
+                      onChange={(e) => setConfirmBulkWarnings(e.target.checked)}
+                      className="h-4 w-4 accent-amber-600"
+                    />
+                    I confirm all warning entries are actual values and should be submitted.
+                  </label>
+                )}
+                <div className="mt-4 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={onBulkSubmit}
+                    className="flex-1 rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-sm font-bold text-white shadow-md"
+                  >
+                    Confirm & Submit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkReviewModal(false)}
+                    className="flex-1 rounded-lg border border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)]"
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             </div>

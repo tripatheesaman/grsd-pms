@@ -70,6 +70,9 @@ export async function GET() {
       averageHoursPerDay: true,
       currentHours: true,
       usageUnit: true,
+      planningBaselineCheckCode: true,
+      planningBaselineCheckDate: true,
+      planningBaselineHours: true,
       groundingPeriods: {
         where: {
           fromDate: { lte: now },
@@ -140,6 +143,27 @@ export async function GET() {
         });
         return {
           averageHoursPerDay: Number(recalculatedAverage.toFixed(2)),
+        };
+      })(),
+      ...(function () {
+        const avgValue = (function () {
+          const readings = entriesByEquipment.get(item.id) ?? [];
+          if (readings.length < 2) return Number(item.averageHoursPerDay);
+          const dailyRates = deriveDailyRatesFromCumulativeReadings(readings);
+          if (dailyRates.length === 0) return Number(item.averageHoursPerDay);
+          return Number(
+            deriveForecastAverageHoursPerDay({
+              latestAverage: 0,
+              historicalDailyHours: dailyRates,
+            }).toFixed(2),
+          );
+        })();
+        return {
+          isAvgHoursMissing: !Number.isFinite(avgValue) || avgValue <= 0,
+          hasPreviousCheckConfigured:
+            item.planningBaselineCheckCode != null &&
+            item.planningBaselineCheckDate != null &&
+            item.planningBaselineHours != null,
         };
       })(),
       id: item.id,

@@ -37,6 +37,8 @@ export type EquipmentListItem = {
   usageUnit: "HOURS" | "KM";
   activeRuleCount: number;
   hasActiveGrounding?: boolean;
+  hasPreviousCheckConfigured?: boolean;
+  isAvgHoursMissing?: boolean;
 };
 
 export type CheckRuleInput = {
