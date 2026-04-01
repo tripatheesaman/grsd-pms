@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api/client";
 import { apiPath } from "@/lib/config/app-config";
 import {
@@ -201,6 +201,7 @@ export function useCheckSheetsPaginated(
     queryKey: ["checksheets", "paginated", params],
     queryFn: () => apiGet<PaginatedCheckSheetResponse>(`/api/checksheets?${qs}`),
     enabled,
+    placeholderData: keepPreviousData,
   });
 }
 
