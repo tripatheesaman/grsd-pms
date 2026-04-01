@@ -4,6 +4,7 @@ import { parseBody, requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
 import { deriveDailyRatesFromCumulativeReadings, deriveForecastAverageHoursPerDay } from "@/lib/planning/engine";
+import { recalculateEquipmentUsage } from "@/lib/planning/recalculate-usage";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
@@ -234,7 +235,8 @@ export async function POST(request: Request) {
   }
 
   for (const equipmentId of equipmentIdsToSync) {
-    syncEquipmentPlan(equipmentId, new Date().getFullYear()).catch(() => null);
+    await recalculateEquipmentUsage(equipmentId);
+    await syncEquipmentPlan(equipmentId, new Date().getFullYear());
   }
 
   writeAuditLog({

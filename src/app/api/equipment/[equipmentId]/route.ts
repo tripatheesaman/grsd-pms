@@ -5,6 +5,8 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
+import { determineStatus } from "@/lib/planning/engine";
+import { getSystemThresholds } from "@/lib/planning/thresholds";
 
 import { UsageUnit } from "@prisma/client";
 
@@ -36,6 +38,8 @@ export async function GET(_: Request, context: RouteContext) {
   }
 
   const { equipmentId } = await context.params;
+  const now = new Date();
+  const thresholds = await getSystemThresholds();
   const equipment = await (prisma as any).equipment.findUnique({
     where: { id: equipmentId },
     include: {
@@ -100,17 +104,38 @@ export async function GET(_: Request, context: RouteContext) {
       isActive: rule.isActive,
       isOneTime: rule.isOneTime,
     })),
-    checkSheets: visibleSheets.map((sheet: any) => ({
-      id: sheet.id,
-      checkCode: sheet.checkCode,
-      dueHours: Number(sheet.dueHours),
-      dueDate: sheet.dueDate.toISOString(),
-      triggerType: sheet.triggerType,
-      status: sheet.status,
-      issuedAt: sheet.issuedAt?.toISOString() ?? null,
-      completedAt: sheet.completedAt?.toISOString() ?? null,
-      pdfFilePath: sheet.pdfFilePath ?? null,
-    })),
+    checkSheets: visibleSheets.map((sheet: any) => {
+      const dueHours = Number(sheet.dueHours);
+      const currentHours = Number(equipment.currentHours);
+      const isIssued = sheet.issuedAt !== null && sheet.completedAt === null;
+      const isCompleted = sheet.status === "COMPLETED";
+      const effectiveDueDate =
+        !isCompleted && !isIssued && currentHours >= dueHours && sheet.dueDate > now
+          ? now
+          : sheet.dueDate;
+      const effectiveStatus = isCompleted
+        ? sheet.status
+        : isIssued
+          ? "ISSUED"
+          : determineStatus(
+              dueHours,
+              currentHours,
+              effectiveDueDate,
+              now,
+              thresholds,
+            );
+      return {
+        id: sheet.id,
+        checkCode: sheet.checkCode,
+        dueHours,
+        dueDate: effectiveDueDate.toISOString(),
+        triggerType: sheet.triggerType,
+        status: effectiveStatus,
+        issuedAt: sheet.issuedAt?.toISOString() ?? null,
+        completedAt: sheet.completedAt?.toISOString() ?? null,
+        pdfFilePath: sheet.pdfFilePath ?? null,
+      };
+    }),
     groundingPeriods: equipment.groundingPeriods.map((period: any) => ({
       id: period.id,
       fromDate: period.fromDate.toISOString(),

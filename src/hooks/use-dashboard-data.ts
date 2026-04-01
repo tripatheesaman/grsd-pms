@@ -475,8 +475,9 @@ export function useApproveEntry() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipments"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
     },
   });
 }
@@ -491,8 +492,9 @@ export function useApproveEntriesByDate() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipments"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
     },
   });
 }
@@ -507,8 +509,9 @@ export function useRejectEntriesByDate() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipments"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
     },
   });
 }
@@ -523,6 +526,8 @@ export function useRejectEntry() {
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entries"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
+      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
     },
   });
 }
@@ -558,6 +563,9 @@ export function useDeleteEntry() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["entries"] });
       queryClient.invalidateQueries({ queryKey: ["entries", "pending"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
+      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
     },
   });
 }
@@ -748,6 +756,7 @@ export function useEquipmentDetail(equipmentId: string | null) {
     queryKey: ["equipment", "detail", equipmentId],
     queryFn: () => apiGet<EquipmentDetail>(`/api/equipment/${equipmentId}`),
     enabled: Boolean(equipmentId),
+    refetchOnMount: "always",
   });
 }
 

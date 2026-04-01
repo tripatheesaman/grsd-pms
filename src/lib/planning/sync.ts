@@ -49,7 +49,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     return null;
   }
 
-  const allEntries = await prisma.dailyEntry.findMany({
+  const allEntriesRaw = await prisma.dailyEntry.findMany({
     where: {
       equipmentId,
       status: EntryStatus.APPROVED,
@@ -59,9 +59,11 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
       entryDate: true,
     },
     orderBy: {
-      entryDate: "asc",
+      entryDate: "desc",
     },
+    take: 120,
   });
+  const allEntries = [...allEntriesRaw].sort((a, b) => a.entryDate.getTime() - b.entryDate.getTime());
 
   const lastCompletedCheck = equipment.checkSheets[0];
   const lastCompletedAt = lastCompletedCheck?.completedAt ?? lastCompletedCheck?.dueDate ?? null;
@@ -321,15 +323,6 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
         status,
       });
     }
-  }
-
-  const updateAverage = Math.abs(forecastAverage - Number(equipment.averageHoursPerDay)) >= 0.01;
-
-  if (updateAverage) {
-    await prisma.equipment.update({
-      where: { id: equipmentId },
-      data: { averageHoursPerDay: forecastAverage },
-    });
   }
 
   if (toCreate.length > 0) {

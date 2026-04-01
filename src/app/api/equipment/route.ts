@@ -6,6 +6,10 @@ import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { CheckStatus, UsageUnit } from "@prisma/client";
 import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
+import {
+  deriveDailyRatesFromCumulativeReadings,
+  deriveForecastAverageHoursPerDay,
+} from "@/lib/planning/engine";
 
 const ruleSchema = z.object({
   code: z
@@ -86,13 +90,62 @@ export async function GET() {
     },
   });
 
+  const equipmentIds = items.map((item: any) => item.id);
+  const recentApprovedEntries = equipmentIds.length > 0
+    ? await prisma.dailyEntry.findMany({
+        where: {
+          equipmentId: { in: equipmentIds },
+          status: "APPROVED",
+        },
+        select: {
+          equipmentId: true,
+          entryDate: true,
+          hoursRun: true,
+        },
+        orderBy: [
+          { equipmentId: "asc" },
+          { entryDate: "asc" },
+        ],
+      })
+    : [];
+
+  const entriesByEquipment = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
+  for (const entry of recentApprovedEntries) {
+    const current = entriesByEquipment.get(entry.equipmentId) ?? [];
+    current.push({
+      entryDate: entry.entryDate,
+      hoursRun: Number(entry.hoursRun),
+    });
+    entriesByEquipment.set(entry.equipmentId, current);
+  }
+
   return ok(
     items.map((item: any) => ({
+      ...(function () {
+        const readings = entriesByEquipment.get(item.id) ?? [];
+        if (readings.length < 2) {
+          return {
+            averageHoursPerDay: Number(item.averageHoursPerDay),
+          };
+        }
+        const dailyRates = deriveDailyRatesFromCumulativeReadings(readings);
+        if (dailyRates.length === 0) {
+          return {
+            averageHoursPerDay: Number(item.averageHoursPerDay),
+          };
+        }
+        const recalculatedAverage = deriveForecastAverageHoursPerDay({
+          latestAverage: 0,
+          historicalDailyHours: dailyRates,
+        });
+        return {
+          averageHoursPerDay: Number(recalculatedAverage.toFixed(2)),
+        };
+      })(),
       id: item.id,
       equipmentNumber: item.equipmentNumber,
       displayName: item.displayName,
       equipmentClass: item.equipmentClass,
-      averageHoursPerDay: Number(item.averageHoursPerDay),
       currentHours: Number(item.currentHours),
       usageUnit: item.usageUnit,
       activeRuleCount: item.checkRules.length,

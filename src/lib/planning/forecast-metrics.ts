@@ -20,7 +20,7 @@ export function buildForecastMetrics(
   historicalDailyHours: number[],
   currentAverageHoursPerDay: number,
 ) {
-  const values = historicalDailyHours.filter((value) => Number.isFinite(value) && value > 0);
+  const values = historicalDailyHours.filter((value) => Number.isFinite(value) && value >= 0);
   const forecastAverage = deriveForecastAverageHoursPerDay({
     latestAverage: currentAverageHoursPerDay,
     historicalDailyHours: values,

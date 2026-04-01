@@ -140,12 +140,12 @@ export function deriveDailyRatesFromCumulativeReadings(
     const prev = sorted[i - 1]!;
     const curr = sorted[i]!;
     const deltaHours = Number(curr.hoursRun) - Number(prev.hoursRun);
-    if (!Number.isFinite(deltaHours) || deltaHours <= 0) continue;
+    if (!Number.isFinite(deltaHours) || deltaHours < 0) continue;
     const dayMs = 24 * 60 * 60 * 1000;
     const dayDiffRaw = (curr.entryDate.getTime() - prev.entryDate.getTime()) / dayMs;
     const dayDiff = Math.max(1, Math.round(dayDiffRaw));
     const rate = deltaHours / dayDiff;
-    if (Number.isFinite(rate) && rate > 0) {
+    if (Number.isFinite(rate) && rate >= 0) {
       rates.push(rate);
     }
   }
@@ -169,7 +169,7 @@ export function deriveForecastAverageHoursPerDay(input: {
   upcomingEnteredHours?: number;
 }) {
   const series = input.historicalDailyHours
-    .filter((value) => Number.isFinite(value) && value > 0)
+    .filter((value) => Number.isFinite(value) && value >= 0)
     .slice(-45);
   if (input.upcomingEnteredHours && input.upcomingEnteredHours > 0) {
     series.push(input.upcomingEnteredHours);
@@ -225,8 +225,16 @@ export function buildYearlyPlan(input: {
   const now = input.now ?? new Date();
   const anchorDate = input.anchorDate ?? now;
   const profile = buildPlanningProfile(input.rules);
-  if (!profile || input.averageHoursPerDay <= 0) {
+  if (!profile) {
     return [];
+  }
+  if (input.averageHoursPerDay <= 0) {
+    const hasCalendarRule = profile.rules.some(
+      (rule) => !!rule.intervalTimeValue && rule.intervalTimeValue > 0 && !!rule.intervalTimeUnit,
+    );
+    if (!hasCalendarRule) {
+      return [];
+    }
   }
 
   const endOfYear = new Date(input.year, 11, 31, 23, 59, 59, 999);
@@ -274,8 +282,10 @@ export function buildYearlyPlan(input: {
     }
 
     const deltaHours = nextMilestone - simulatedHours;
-    const daysByHours = Math.max(0, deltaHours / input.averageHoursPerDay);
-    const hoursDate = addDays(referenceDate, Math.ceil(daysByHours));
+    const hasHourForecast = input.averageHoursPerDay > 0;
+    const hoursDate = hasHourForecast
+      ? addDays(referenceDate, Math.ceil(Math.max(0, deltaHours / input.averageHoursPerDay)))
+      : new Date(8640000000000000);
     let triggerType: TriggerType = TriggerType.HOURS;
     let issueDate = hoursDate;
 
@@ -289,6 +299,10 @@ export function buildYearlyPlan(input: {
         triggerType = TriggerType.CALENDAR;
         issueDate = timeDate;
       }
+    }
+    if (!hasHourForecast && triggerType === TriggerType.HOURS) {
+      simulatedHours = nextMilestone;
+      continue;
     }
     if (issueDate > endOfYear) {
       break;

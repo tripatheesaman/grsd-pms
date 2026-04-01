@@ -3,6 +3,7 @@ import { requireAccess } from "@/lib/api/guard";
 import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
+import { recalculateEquipmentUsage } from "@/lib/planning/recalculate-usage";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { permissionKeys } from "@/lib/security/permissions";
 
@@ -44,24 +45,26 @@ export async function POST(request: Request) {
 
   let impliedCompletedCreated = 0;
 
-  const batchSize = 10;
+  const batchSize = 25;
   for (let i = 0; i < equipments.length; i += batchSize) {
     const batch = equipments.slice(i, i + batchSize);
-    await Promise.all(
+    const results = await Promise.all(
       batch.map(async (e) => {
+        let created = 0;
         if (e.planningBaselineCheckDate && e.planningBaselineHours != null) {
           const res = await ensureImpliedCompletedChecks({
             equipmentId: e.id,
             baselineHours: Number(e.planningBaselineHours),
             baselineDate: e.planningBaselineCheckDate,
           }).catch(() => ({ created: 0 }));
-          impliedCompletedCreated += res.created;
+          created += res.created;
         }
-        for (const year of years) {
-          await syncEquipmentPlan(e.id, year);
-        }
+        await recalculateEquipmentUsage(e.id);
+        await Promise.all(years.map((year) => syncEquipmentPlan(e.id, year)));
+        return created;
       }),
     );
+    impliedCompletedCreated += results.reduce((sum, value) => sum + value, 0);
   }
 
   return ok({

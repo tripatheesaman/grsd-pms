@@ -54,6 +54,7 @@ export async function GET(request: Request) {
   const equipmentTo = url.searchParams.get("equipmentTo")?.trim() || "";
   const dateFromRaw = url.searchParams.get("dateFrom")?.trim() || "";
   const dateToRaw = url.searchParams.get("dateTo")?.trim() || "";
+  const refreshBeforeExport = url.searchParams.get("refresh") === "true";
 
   let dateFrom: Date | undefined;
   let dateTo: Date | undefined;
@@ -125,15 +126,50 @@ export async function GET(request: Request) {
     orderBy: { equipmentNumber: "asc" },
   });
 
-  const batchSize = 10;
-  for (let i = 0; i < equipmentsToSync.length; i += batchSize) {
-    const batch = equipmentsToSync.slice(i, i + batchSize);
-    for (const year of years) {
-      await Promise.all(batch.map((e) => syncEquipmentPlan(e.id, year)));
+  if (refreshBeforeExport) {
+    const batchSize = 30;
+    for (let i = 0; i < equipmentsToSync.length; i += batchSize) {
+      const batch = equipmentsToSync.slice(i, i + batchSize);
+      for (const year of years) {
+        await Promise.all(batch.map((e) => syncEquipmentPlan(e.id, year)));
+      }
     }
   }
 
   if (mode === "pictorial" || format === "html") {
+    const sheets = await prisma.checkSheet.findMany({
+      where: {
+        equipmentId: {
+          in: equipmentsToSync.map((e) => e.id),
+        },
+        ...(where.dueDate
+          ? {
+              dueDate: where.dueDate,
+            }
+          : {}),
+        status: {
+          in: [
+            CheckStatus.PREDICTED,
+            CheckStatus.ISSUE_REQUIRED,
+            CheckStatus.NEAR_DUE,
+            CheckStatus.OVERDUE,
+          ],
+        },
+      },
+      select: {
+        equipmentId: true,
+        checkCode: true,
+        dueDate: true,
+        dueHours: true,
+        status: true,
+      },
+      orderBy: [
+        { dueDate: "asc" },
+        { checkCode: "asc" },
+      ],
+    });
+
+    const equipmentMap = new Map(equipmentsToSync.map((e) => [e.id, e]));
     const pictorialData: Array<{
       equipmentNumber: string;
       displayName: string;
@@ -143,54 +179,25 @@ export async function GET(request: Request) {
       status: CheckStatus;
     }> = [];
 
-    for (const eq of equipmentsToSync) {
-      const sheets = await prisma.checkSheet.findMany({
-        where: {
-          equipmentId: eq.id,
-          ...(where.dueDate
-            ? {
-                dueDate: where.dueDate,
-              }
-            : {}),
-          status: {
-            in: [
-              CheckStatus.PREDICTED,
-              CheckStatus.ISSUE_REQUIRED,
-              CheckStatus.NEAR_DUE,
-              CheckStatus.OVERDUE,
-            ],
-          },
-        },
-        select: {
-          checkCode: true,
-          dueDate: true,
-          dueHours: true,
-          status: true,
-        },
-        orderBy: [
-          { dueDate: "asc" },
-          { checkCode: "asc" },
-        ],
-      });
-
-      const seenByWeek = new Set<string>();
-      for (const s of sheets) {
-        const week = isoWeek(s.dueDate);
-        const key = `${eq.id}:${s.checkCode}:${week}`;
-        if (seenByWeek.has(key)) {
-          continue;
-        }
-        seenByWeek.add(key);
-        const weekDate = startOfIsoWeek(s.dueDate);
-        pictorialData.push({
-          equipmentNumber: eq.equipmentNumber,
-          displayName: eq.displayName,
-          checkCode: s.checkCode,
-          dueDate: weekDate,
-          dueHours: Number(s.dueHours),
-          status: s.status,
-        });
+    const seenByWeek = new Set<string>();
+    for (const s of sheets) {
+      const eq = equipmentMap.get(s.equipmentId);
+      if (!eq) continue;
+      const week = isoWeek(s.dueDate);
+      const key = `${eq.id}:${s.checkCode}:${week}`;
+      if (seenByWeek.has(key)) {
+        continue;
       }
+      seenByWeek.add(key);
+      const weekDate = startOfIsoWeek(s.dueDate);
+      pictorialData.push({
+        equipmentNumber: eq.equipmentNumber,
+        displayName: eq.displayName,
+        checkCode: s.checkCode,
+        dueDate: weekDate,
+        dueHours: Number(s.dueHours),
+        status: s.status,
+      });
     }
 
     const equipmentCount = new Set(pictorialData.map((s) => s.equipmentNumber)).size;

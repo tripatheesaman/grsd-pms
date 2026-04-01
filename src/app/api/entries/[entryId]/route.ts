@@ -3,6 +3,8 @@ import { EntryStatus } from "@prisma/client";
 import { parseBody, requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
+import { syncEquipmentPlan } from "@/lib/planning/sync";
+import { recalculateEquipmentUsage } from "@/lib/planning/recalculate-usage";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
@@ -95,6 +97,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     data: updateData,
   });
 
+  await recalculateEquipmentUsage(entry.equipmentId);
+  await syncEquipmentPlan(entry.equipmentId, new Date().getFullYear());
+
   await writeAuditLog({
     userId: access.user.id,
     action: "equipment.entry.update",
@@ -138,6 +143,9 @@ export async function DELETE(_: Request, context: RouteContext) {
   await prisma.dailyEntry.delete({
     where: { id: entryId },
   });
+
+  await recalculateEquipmentUsage(entry.equipmentId);
+  await syncEquipmentPlan(entry.equipmentId, new Date().getFullYear());
 
   await writeAuditLog({
     userId: access.user.id,
