@@ -342,7 +342,7 @@ export async function GET(request: Request) {
       if (dateToObj) checkWhere.completedAt.lte = dateToObj;
     }
 
-    const completedChecks = await prisma.checkSheet.findMany({
+    const completedChecksRaw = await prisma.checkSheet.findMany({
       where: checkWhere,
       include: {
         completedByTechnicians: {
@@ -362,6 +362,21 @@ export async function GET(request: Request) {
         },
       },
       orderBy: { completedAt: "asc" },
+    });
+    const latestCompleted = [...completedChecksRaw]
+      .sort((a, b) => {
+        const aTime = new Date(a.completedAt ?? a.dueDate).getTime();
+        const bTime = new Date(b.completedAt ?? b.dueDate).getTime();
+        if (aTime !== bTime) return bTime - aTime;
+        return Number(b.completedHours ?? b.dueHours ?? 0) - Number(a.completedHours ?? a.dueHours ?? 0);
+      })[0] ?? null;
+    const latestCompletedAt = latestCompleted ? new Date(latestCompleted.completedAt ?? latestCompleted.dueDate) : null;
+    const latestCompletedHours = latestCompleted ? Number(latestCompleted.completedHours ?? latestCompleted.dueHours ?? 0) : null;
+    const completedChecks = completedChecksRaw.filter((check) => {
+      if (!latestCompletedAt || latestCompletedHours == null || !check.completedAt) return true;
+      const sameCompletionDay = new Date(check.completedAt).getTime() === latestCompletedAt.getTime();
+      if (!sameCompletionDay) return true;
+      return Number(check.dueHours) >= latestCompletedHours;
     });
 
     const groundingWhere: any = { equipmentId: equipment.id };

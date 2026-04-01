@@ -4,6 +4,7 @@ import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { determineStatus } from "@/lib/planning/engine";
+import { getSystemThresholds } from "@/lib/planning/thresholds";
 
 function addMonths(date: Date, months: number) {
   const value = new Date(date);
@@ -11,46 +12,9 @@ function addMonths(date: Date, months: number) {
   return value;
 }
 
-let systemConfigCache: {
-  approachingOffsetHours: number;
-  issueOffsetHours: number;
-  nearOffsetHours: number;
-  timestamp: number;
-} | null = null;
+const ALERT_START_DATE = new Date("2026-04-01T00:00:00.000Z");
 
-const CONFIG_CACHE_TTL = 60000;
-
-async function getSystemThresholds() {
-  const now = Date.now();
-  if (systemConfigCache && (now - systemConfigCache.timestamp) < CONFIG_CACHE_TTL) {
-    return {
-      approachingOffsetHours: systemConfigCache.approachingOffsetHours,
-      issueOffsetHours: systemConfigCache.issueOffsetHours,
-      nearOffsetHours: systemConfigCache.nearOffsetHours,
-    };
-  }
-
-  const [approachingConfig, issueConfig, nearConfig] = await Promise.all([
-    prisma.systemConfig.findUnique({ where: { key: "approaching_offset_hours" } }).catch(() => null),
-    prisma.systemConfig.findUnique({ where: { key: "issue_offset_hours" } }).catch(() => null),
-    prisma.systemConfig.findUnique({ where: { key: "near_offset_hours" } }).catch(() => null),
-  ]);
-
-  const thresholds = {
-    approachingOffsetHours: approachingConfig ? Number(approachingConfig.value) : 120,
-    issueOffsetHours: issueConfig ? Number(issueConfig.value) : 40,
-    nearOffsetHours: nearConfig ? Number(nearConfig.value) : 10,
-  };
-
-  systemConfigCache = {
-    ...thresholds,
-    timestamp: now,
-  };
-
-  return thresholds;
-}
-
-export async function GET() {
+export async function GET(request: Request) {
   const access = await requireAccess({
     minRole: "USER",
     requiredPermission: permissionKeys.checksheetRead,
@@ -61,6 +25,18 @@ export async function GET() {
 
   const thresholds = await getSystemThresholds();
   const now = new Date();
+  const requestUrl = new URL(request.url);
+  const searchParams = requestUrl.searchParams;
+  const paginated = searchParams.get("paginated") === "true";
+  const openOnly = searchParams.get("openOnly") === "true";
+  const page = Math.max(1, Number(searchParams.get("page") ?? 1) || 1);
+  const pageSize = Math.min(100, Math.max(10, Number(searchParams.get("pageSize") ?? 20) || 20));
+  const statusFilter = searchParams.get("status");
+  const equipmentSearch = searchParams.get("equipmentSearch")?.trim().toLowerCase() ?? "";
+  const checkCodeFilter = searchParams.get("checkCode")?.trim().toUpperCase() ?? "";
+  const triggerTypeFilter = searchParams.get("triggerType");
+  const dateFromFilter = searchParams.get("dateFrom");
+  const dateToFilter = searchParams.get("dateTo");
 
   const checkSheets = await prisma.checkSheet.findMany({
     where: {
@@ -74,6 +50,9 @@ export async function GET() {
           CheckStatus.COMPLETED,
         ],
       },
+      dueDate: {
+        gte: ALERT_START_DATE,
+      },
     },
     include: {
       equipment: {
@@ -82,6 +61,15 @@ export async function GET() {
           displayName: true,
           currentHours: true,
           usageUnit: true,
+          checkSheets: {
+            where: { status: CheckStatus.COMPLETED },
+            orderBy: [{ completedAt: "desc" }, { dueDate: "desc" }],
+            take: 1,
+            select: {
+              completedAt: true,
+              dueDate: true,
+            },
+          },
           groundingPeriods: {
             where: {
               fromDate: { lte: now },
@@ -99,38 +87,35 @@ export async function GET() {
     orderBy: {
       dueDate: "asc",
     },
-    take: 100,
+    take: 500,
   });
 
-  return ok(
-    checkSheets
-      .map((sheet) => {
-        const isIssued = sheet.issuedAt !== null && sheet.completedAt === null;
-        const status = isIssued ? CheckStatus.ISSUED : sheet.status;
-
-        if (status === CheckStatus.ISSUED || status === CheckStatus.COMPLETED) {
-          return {
-            id: sheet.id,
-            equipmentId: sheet.equipmentId,
-            equipmentNumber: sheet.equipment.equipmentNumber,
-            equipmentName: sheet.equipment.displayName,
-            usageUnit: sheet.equipment.usageUnit,
-            checkCode: sheet.checkCode,
-            dueDate: sheet.dueDate.toISOString(),
-            dueHours: Number(sheet.dueHours),
-            status,
-            triggerType: sheet.triggerType,
-          };
+  const mapped = checkSheets
+    .map((sheet) => {
+        const latestCompleted = sheet.equipment.checkSheets[0] ?? null;
+        const latestCompletedAt = latestCompleted?.completedAt ?? latestCompleted?.dueDate ?? null;
+        if (latestCompletedAt && sheet.dueDate <= latestCompletedAt) {
+          return null;
         }
 
         const currentHours = Number(sheet.equipment.currentHours);
+        const dueHours = Number(sheet.dueHours);
+        const isHourReached = currentHours >= dueHours;
+        const effectiveDueDate = isHourReached && sheet.dueDate > now ? now : sheet.dueDate;
         const recalculatedStatus = determineStatus(
-          Number(sheet.dueHours),
+          dueHours,
           currentHours,
-          sheet.dueDate,
+          effectiveDueDate,
           now,
           thresholds,
         );
+        const isIssued = sheet.issuedAt !== null && sheet.completedAt === null;
+        const effectiveStatus =
+          sheet.status === CheckStatus.COMPLETED
+            ? CheckStatus.COMPLETED
+            : isIssued
+              ? CheckStatus.ISSUED
+              : recalculatedStatus;
 
         const activeGrounding = sheet.equipment.groundingPeriods[0] ?? null;
 
@@ -148,12 +133,68 @@ export async function GET() {
           equipmentName: sheet.equipment.displayName,
           usageUnit: sheet.equipment.usageUnit,
           checkCode: sheet.checkCode,
-          dueDate: sheet.dueDate.toISOString(),
-          dueHours: Number(sheet.dueHours),
-          status: recalculatedStatus,
+          dueDate: effectiveDueDate.toISOString(),
+          dueHours,
+          status: effectiveStatus,
           triggerType: sheet.triggerType,
         };
       })
-      .filter((item) => item !== null),
-  );
+      .filter((item) => item !== null);
+
+  const filtered = mapped.filter((sheet) => {
+    if (!sheet) return false;
+    if (openOnly && (sheet.status === CheckStatus.ISSUED || sheet.status === CheckStatus.COMPLETED)) {
+      return false;
+    }
+    if (statusFilter && statusFilter !== "ALL" && sheet.status !== statusFilter) {
+      return false;
+    }
+    if (equipmentSearch) {
+      const eqNumber = sheet.equipmentNumber.toLowerCase();
+      const eqName = sheet.equipmentName.toLowerCase();
+      if (!eqNumber.includes(equipmentSearch) && !eqName.includes(equipmentSearch)) {
+        return false;
+      }
+    }
+    if (checkCodeFilter && sheet.checkCode.toUpperCase() !== checkCodeFilter) {
+      return false;
+    }
+    if (triggerTypeFilter && triggerTypeFilter !== "ALL" && sheet.triggerType !== triggerTypeFilter) {
+      return false;
+    }
+    if (dateFromFilter) {
+      const from = new Date(dateFromFilter);
+      if (new Date(sheet.dueDate) < from) {
+        return false;
+      }
+    }
+    if (dateToFilter) {
+      const to = new Date(dateToFilter);
+      to.setHours(23, 59, 59, 999);
+      if (new Date(sheet.dueDate) > to) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  filtered.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+  if (!paginated) {
+    return ok(filtered);
+  }
+
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  const items = filtered.slice(start, start + pageSize);
+
+  return ok({
+    items,
+    total,
+    page: safePage,
+    pageSize,
+    totalPages,
+  });
 }

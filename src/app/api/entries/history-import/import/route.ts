@@ -233,6 +233,7 @@ export async function POST(request: Request) {
       await tx.equipment.update({
         where: { id: item.equipmentId },
         data: {
+          planningBaselineCheckCode: item.lastYearCheckCode,
           planningBaselineCheckDate: item.lastYearCheckDate,
           planningBaselineHours: item.lastYearCheckHours,
         },

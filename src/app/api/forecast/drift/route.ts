@@ -1,5 +1,7 @@
 import { requireAccess } from "@/lib/api/guard";
 import { ok } from "@/lib/api/response";
+import { EntryStatus } from "@prisma/client";
+import { deriveDailyRatesFromCumulativeReadings } from "@/lib/planning/engine";
 import { buildForecastMetrics } from "@/lib/planning/forecast-metrics";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
@@ -36,6 +38,9 @@ export async function GET() {
       equipmentClass: true,
       averageHoursPerDay: true,
       entries: {
+        where: {
+          status: EntryStatus.APPROVED,
+        },
         select: {
           hoursRun: true,
           entryDate: true,
@@ -49,7 +54,12 @@ export async function GET() {
 
   const byClass = new Map<string, DriftAccumulator>();
   for (const equipment of equipments) {
-    const series = equipment.entries.map((entry) => Number(entry.hoursRun)).filter((value) => value > 0);
+    const series = deriveDailyRatesFromCumulativeReadings(
+      equipment.entries.map((entry) => ({
+        entryDate: entry.entryDate,
+        hoursRun: Number(entry.hoursRun),
+      })),
+    );
     if (series.length < 10) {
       continue;
     }

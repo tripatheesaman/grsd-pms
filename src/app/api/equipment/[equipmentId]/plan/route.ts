@@ -3,6 +3,7 @@ import { fail, ok } from "@/lib/api/response";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
+import { CheckStatus } from "@prisma/client";
 
 type RouteContext = {
   params: Promise<{ equipmentId: string }>;
@@ -53,6 +54,9 @@ export async function GET(request: Request, context: RouteContext) {
       dueDate: {
         gte: new Date(year, 0, 1),
         lte: new Date(year, 11, 31, 23, 59, 59, 999),
+      },
+      status: {
+        not: CheckStatus.COMPLETED,
       },
     },
     select: {

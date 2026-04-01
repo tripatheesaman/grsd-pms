@@ -2,7 +2,7 @@ import { EntryStatus } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
-import { deriveForecastAverageHoursPerDay } from "@/lib/planning/engine";
+import { deriveDailyRatesFromCumulativeReadings, deriveForecastAverageHoursPerDay } from "@/lib/planning/engine";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
@@ -43,7 +43,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     return fail("BAD_REQUEST", "Entry is not pending approval", 400);
   }
 
-  const [previousEntry, hasAnyApprovedEntries, recentEntries] = await Promise.all([
+  const [previousEntry, recentEntries] = await Promise.all([
     prisma.dailyEntry.findFirst({
       where: {
         equipmentId: entry.equipmentId,
@@ -56,13 +56,8 @@ export async function PATCH(request: Request, context: RouteContext) {
         entryDate: "desc",
       },
       select: {
+        entryDate: true,
         hoursRun: true,
-      },
-    }),
-    prisma.dailyEntry.count({
-      where: {
-        equipmentId: entry.equipmentId,
-        status: EntryStatus.APPROVED,
       },
     }),
     prisma.dailyEntry.findMany({
@@ -75,9 +70,9 @@ export async function PATCH(request: Request, context: RouteContext) {
         hoursRun: true,
       },
       orderBy: {
-        entryDate: "asc",
+        entryDate: "desc",
       },
-      take: 45,
+      take: 90,
     }),
   ]);
 
@@ -92,31 +87,28 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   const sortedWithNew = [
-    ...recentEntries.map((e) => ({ date: e.entryDate, hours: Number(e.hoursRun) })),
-    { date: entry.entryDate, hours: Number(entry.hoursRun) },
-  ].sort((a, b) => a.date.getTime() - b.date.getTime());
+    ...recentEntries.map((e) => ({ entryDate: e.entryDate, hoursRun: Number(e.hoursRun) })),
+    { entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) },
+  ]
+    .sort((a, b) => b.entryDate.getTime() - a.entryDate.getTime())
+    .slice(0, 90)
+    .sort((a, b) => a.entryDate.getTime() - b.entryDate.getTime());
+  const dailyDeltas = deriveDailyRatesFromCumulativeReadings(sortedWithNew);
 
-  const dailyDeltas: number[] = [];
-  let prevCumulative = previousEntry ? Number(previousEntry.hoursRun) : (sortedWithNew[0]?.hours ?? 0);
-  for (let i = 0; i < sortedWithNew.length; i += 1) {
-    const item = sortedWithNew[i];
-    if (i === 0 && !previousEntry) {
-      prevCumulative = item.hours;
-      continue;
-    }
-    const delta = Math.max(0, item.hours - prevCumulative);
-    if (delta > 0) dailyDeltas.push(delta);
-    prevCumulative = item.hours;
+  let dailyIncrementForNew: number | undefined;
+  if (previousEntry) {
+    const rawDelta = Math.max(0, Number(entry.hoursRun) - Number(previousEntry.hoursRun));
+    const dayMs = 24 * 60 * 60 * 1000;
+    const rawDays = (entry.entryDate.getTime() - previousEntry.entryDate.getTime()) / dayMs;
+    const days = Math.max(1, Math.round(rawDays));
+    const rate = rawDelta / days;
+    if (Number.isFinite(rate) && rate > 0) dailyIncrementForNew = rate;
   }
-
-  const dailyIncrementForNew = previousEntry
-    ? Math.max(0, Number(entry.hoursRun) - Number(previousEntry.hoursRun))
-    : 0;
 
   const newAverage = deriveForecastAverageHoursPerDay({
     latestAverage: Number(entry.equipment.averageHoursPerDay),
     historicalDailyHours: dailyDeltas,
-    upcomingEnteredHours: dailyIncrementForNew > 0 ? dailyIncrementForNew : undefined,
+    upcomingEnteredHours: dailyIncrementForNew,
   });
 
   const maxApprovedHours = recentEntries.length > 0

@@ -5,6 +5,8 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
+const HOURS_TO_DAYS_BASE = 8;
+
 export async function GET() {
   const access = await requireAccess({
     minRole: "ADMIN",
@@ -16,6 +18,9 @@ export async function GET() {
 
   try {
     const [
+      approachingDays,
+      issueDays,
+      nearDays,
       approachingHours,
       issueHours,
       nearHours,
@@ -33,6 +38,9 @@ export async function GET() {
       emailTemplateBody,
       emailReminderDaysBefore,
     ] = await Promise.all([
+      (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_days" } }),
+      (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_days" } }),
+      (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_days" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }),
@@ -51,10 +59,20 @@ export async function GET() {
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_reminder_days_before" } }),
     ]);
 
+    const approachingOffsetDays = approachingDays
+      ? Number(approachingDays.value)
+      : (approachingHours ? Number(approachingHours.value) : 120) / HOURS_TO_DAYS_BASE;
+    const issueOffsetDays = issueDays
+      ? Number(issueDays.value)
+      : (issueHours ? Number(issueHours.value) : 40) / HOURS_TO_DAYS_BASE;
+    const nearOffsetDays = nearDays
+      ? Number(nearDays.value)
+      : (nearHours ? Number(nearHours.value) : 10) / HOURS_TO_DAYS_BASE;
+
     return ok({
-      approachingOffsetHours: approachingHours ? Number(approachingHours.value) : 120,
-      issueOffsetHours: issueHours ? Number(issueHours.value) : 40,
-      nearOffsetHours: nearHours ? Number(nearHours.value) : 10,
+      approachingOffsetDays: Number(approachingOffsetDays.toFixed(2)),
+      issueOffsetDays: Number(issueOffsetDays.toFixed(2)),
+      nearOffsetDays: Number(nearOffsetDays.toFixed(2)),
       sectionCode: sectionCode ? sectionCode.value : "",
       emailEnabled: emailEnabled ? emailEnabled.value === "true" : false,
       emailSendOnIssue: emailSendOnIssue ? emailSendOnIssue.value !== "false" : true,
@@ -71,9 +89,9 @@ export async function GET() {
     });
   } catch (error) {
     return ok({
-      approachingOffsetHours: 120,
-      issueOffsetHours: 40,
-      nearOffsetHours: 10,
+      approachingOffsetDays: 15,
+      issueOffsetDays: 5,
+      nearOffsetDays: 1.25,
       sectionCode: "",
       emailEnabled: false,
       emailSendOnIssue: true,
@@ -92,9 +110,12 @@ export async function GET() {
 }
 
 const updateConfigSchema = z.object({
-  approachingOffsetHours: z.number().int().nonnegative().max(10000).optional(),
-  issueOffsetHours: z.number().int().nonnegative().max(10000).optional(),
-  nearOffsetHours: z.number().int().nonnegative().max(10000).optional(),
+  approachingOffsetDays: z.number().nonnegative().max(10000).optional(),
+  issueOffsetDays: z.number().nonnegative().max(10000).optional(),
+  nearOffsetDays: z.number().nonnegative().max(10000).optional(),
+  approachingOffsetHours: z.number().nonnegative().max(10000).optional(),
+  issueOffsetHours: z.number().nonnegative().max(10000).optional(),
+  nearOffsetHours: z.number().nonnegative().max(10000).optional(),
   sectionCode: z.string().max(50).optional(),
   emailEnabled: z.boolean().optional(),
   emailSendOnIssue: z.boolean().optional(),
@@ -127,27 +148,43 @@ export async function PATCH(request: Request) {
   try {
     const configs: Array<{ key: string; value: string; description: string }> = [];
 
-    if (parsed.data.approachingOffsetHours !== undefined) {
+    const incomingApproachingOffsetDays =
+      parsed.data.approachingOffsetDays ??
+      (parsed.data.approachingOffsetHours !== undefined
+        ? parsed.data.approachingOffsetHours / HOURS_TO_DAYS_BASE
+        : undefined);
+    const incomingIssueOffsetDays =
+      parsed.data.issueOffsetDays ??
+      (parsed.data.issueOffsetHours !== undefined
+        ? parsed.data.issueOffsetHours / HOURS_TO_DAYS_BASE
+        : undefined);
+    const incomingNearOffsetDays =
+      parsed.data.nearOffsetDays ??
+      (parsed.data.nearOffsetHours !== undefined
+        ? parsed.data.nearOffsetHours / HOURS_TO_DAYS_BASE
+        : undefined);
+
+    if (incomingApproachingOffsetDays !== undefined) {
       configs.push({
-        key: "approaching_offset_hours",
-        value: String(parsed.data.approachingOffsetHours),
-        description: "Hours before due date when check status becomes 'Approaching'",
+        key: "approaching_offset_days",
+        value: String(incomingApproachingOffsetDays),
+        description: "Days before due date when check status becomes 'Approaching'",
       });
     }
 
-    if (parsed.data.issueOffsetHours !== undefined) {
+    if (incomingIssueOffsetDays !== undefined) {
       configs.push({
-        key: "issue_offset_hours",
-        value: String(parsed.data.issueOffsetHours),
-        description: "Hours before due date when check status becomes 'Issue Required'",
+        key: "issue_offset_days",
+        value: String(incomingIssueOffsetDays),
+        description: "Days before due date when check status becomes 'Issue Required'",
       });
     }
 
-    if (parsed.data.nearOffsetHours !== undefined) {
+    if (incomingNearOffsetDays !== undefined) {
       configs.push({
-        key: "near_offset_hours",
-        value: String(parsed.data.nearOffsetHours),
-        description: "Hours before due date when check status becomes 'Critical'",
+        key: "near_offset_days",
+        value: String(incomingNearOffsetDays),
+        description: "Days before due date when check status becomes 'Critical'",
       });
     }
 
@@ -296,6 +333,9 @@ export async function PATCH(request: Request) {
     }
 
     const [
+      approachingDays,
+      issueDays,
+      nearDays,
       approachingHours,
       issueHours,
       nearHours,
@@ -313,6 +353,9 @@ export async function PATCH(request: Request) {
       emailTemplateBody,
       emailReminderDaysBefore,
     ] = await Promise.all([
+      (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_days" } }),
+      (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_days" } }),
+      (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_days" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "approaching_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "issue_offset_hours" } }),
       (prisma as any).systemConfig?.findUnique({ where: { key: "near_offset_hours" } }),
@@ -331,10 +374,20 @@ export async function PATCH(request: Request) {
       (prisma as any).systemConfig?.findUnique({ where: { key: "email_reminder_days_before" } }),
     ]);
 
+    const approachingOffsetDays = approachingDays
+      ? Number(approachingDays.value)
+      : (approachingHours ? Number(approachingHours.value) : 120) / HOURS_TO_DAYS_BASE;
+    const issueOffsetDays = issueDays
+      ? Number(issueDays.value)
+      : (issueHours ? Number(issueHours.value) : 40) / HOURS_TO_DAYS_BASE;
+    const nearOffsetDays = nearDays
+      ? Number(nearDays.value)
+      : (nearHours ? Number(nearHours.value) : 10) / HOURS_TO_DAYS_BASE;
+
     return ok({
-      approachingOffsetHours: approachingHours ? Number(approachingHours.value) : 120,
-      issueOffsetHours: issueHours ? Number(issueHours.value) : 40,
-      nearOffsetHours: nearHours ? Number(nearHours.value) : 10,
+      approachingOffsetDays: Number(approachingOffsetDays.toFixed(2)),
+      issueOffsetDays: Number(issueOffsetDays.toFixed(2)),
+      nearOffsetDays: Number(nearOffsetDays.toFixed(2)),
       sectionCode: sectionCode ? sectionCode.value : "",
       emailEnabled: emailEnabled ? emailEnabled.value === "true" : false,
       emailSendOnIssue: emailSendOnIssue ? emailSendOnIssue.value !== "false" : true,

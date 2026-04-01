@@ -109,6 +109,16 @@ export async function GET(request: Request, context: RouteContext) {
   ]);
 
   const now = new Date();
+  const latestCompleted = checks
+    .filter((sheet) => sheet.status === CheckStatus.COMPLETED)
+    .sort((a, b) => {
+      const aTime = new Date(a.completedAt ?? a.dueDate).getTime();
+      const bTime = new Date(b.completedAt ?? b.dueDate).getTime();
+      if (aTime !== bTime) return bTime - aTime;
+      return Number(b.completedHours ?? b.dueHours ?? 0) - Number(a.completedHours ?? a.dueHours ?? 0);
+    })[0] ?? null;
+  const latestCompletedAt = latestCompleted ? new Date(latestCompleted.completedAt ?? latestCompleted.dueDate) : null;
+  const latestCompletedHours = latestCompleted ? Number(latestCompleted.completedHours ?? latestCompleted.dueHours ?? 0) : null;
 
   const historyEntries = entries.map((entry) => ({
     id: entry.id,
@@ -121,7 +131,15 @@ export async function GET(request: Request, context: RouteContext) {
     approvedAt: entry.approvedAt ? entry.approvedAt.toISOString() : null,
   }));
 
-  const historyChecks = checks.map((sheet) => {
+  const historyChecks = checks
+    .filter((sheet) => {
+      if (sheet.status !== CheckStatus.COMPLETED) return true;
+      if (!latestCompletedAt || latestCompletedHours == null || !sheet.completedAt) return true;
+      const sameCompletionDay = new Date(sheet.completedAt).getTime() === latestCompletedAt.getTime();
+      if (!sameCompletionDay) return true;
+      return Number(sheet.dueHours) >= latestCompletedHours;
+    })
+    .map((sheet) => {
     const effectiveStatus =
       sheet.status === CheckStatus.ISSUED && sheet.completedAt === null
         ? CheckStatus.ISSUED
@@ -152,7 +170,7 @@ export async function GET(request: Request, context: RouteContext) {
       isMissed,
       technicianNames,
     };
-  });
+    });
 
   const historyGroundings = groundingPeriods.map((p: any) => ({
     id: p.id,

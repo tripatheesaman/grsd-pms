@@ -204,7 +204,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   const thresholds = await getSystemThresholds();
 
-  const rule = await prisma.checkRule.create({
+  const rule = await (prisma as any).checkRule.create({
     data: {
       equipmentId,
       code: parsed.data.code,

@@ -175,7 +175,7 @@ export async function sendCheckEmail(context: EmailContext) {
       const filename = relative.split("/").pop() || "checksheet.pdf";
       attachments = [{ filename, content: fileBuffer }];
     } catch {
-      // If attachment fails (missing file, etc.), still send email without attachment.
+      
       attachments = undefined;
     }
   }

@@ -36,6 +36,14 @@ export type CheckSheetItem = {
   triggerType: "HOURS" | "CALENDAR";
 };
 
+export type PaginatedCheckSheetResponse = {
+  items: CheckSheetItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
 type CreateEquipmentInput = {
   equipmentNumber: string;
   displayName: string;
@@ -85,6 +93,15 @@ type CreateUserInput = {
   fullName: string;
   password: string;
   role: UserRole;
+};
+
+type UpdateUserInput = {
+  userId: string;
+  fullName?: string;
+  email?: string;
+  password?: string;
+  role?: UserRole;
+  isActive?: boolean;
 };
 
 export function useAnalytics() {
@@ -145,10 +162,45 @@ export function useMarkNotificationRead() {
   });
 }
 
-export function useCheckSheets() {
+export function useCheckSheets(enabled = true) {
   return useQuery({
     queryKey: ["checksheets"],
     queryFn: () => apiGet<CheckSheetItem[]>("/api/checksheets"),
+    enabled,
+  });
+}
+
+export function useCheckSheetsPaginated(
+  params: {
+    page: number;
+    pageSize: number;
+    status?: string;
+    equipmentSearch?: string;
+    checkCode?: string;
+    triggerType?: "ALL" | "HOURS" | "CALENDAR";
+    dateFrom?: string;
+    dateTo?: string;
+    openOnly?: boolean;
+  },
+  enabled = true,
+) {
+  const queryParams = new URLSearchParams();
+  queryParams.set("paginated", "true");
+  queryParams.set("page", String(params.page));
+  queryParams.set("pageSize", String(params.pageSize));
+  if (params.status) queryParams.set("status", params.status);
+  if (params.equipmentSearch) queryParams.set("equipmentSearch", params.equipmentSearch);
+  if (params.checkCode) queryParams.set("checkCode", params.checkCode);
+  if (params.triggerType && params.triggerType !== "ALL") queryParams.set("triggerType", params.triggerType);
+  if (params.dateFrom) queryParams.set("dateFrom", params.dateFrom);
+  if (params.dateTo) queryParams.set("dateTo", params.dateTo);
+  if (params.openOnly) queryParams.set("openOnly", "true");
+
+  const qs = queryParams.toString();
+  return useQuery({
+    queryKey: ["checksheets", "paginated", params],
+    queryFn: () => apiGet<PaginatedCheckSheetResponse>(`/api/checksheets?${qs}`),
+    enabled,
   });
 }
 
@@ -272,9 +324,9 @@ export function useForecastDrift() {
 }
 
 type SystemConfig = {
-  approachingOffsetHours: number;
-  issueOffsetHours: number;
-  nearOffsetHours: number;
+  approachingOffsetDays: number;
+  issueOffsetDays: number;
+  nearOffsetDays: number;
   sectionCode?: string;
   emailEnabled: boolean;
   emailSendOnIssue: boolean;
@@ -301,9 +353,9 @@ export function useUpdateSystemConfig() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (data: {
-      approachingOffsetHours?: number;
-      issueOffsetHours?: number;
-      nearOffsetHours?: number;
+      approachingOffsetDays?: number;
+      issueOffsetDays?: number;
+      nearOffsetDays?: number;
       sectionCode?: string;
       emailEnabled?: boolean;
       emailSendOnIssue?: boolean;
@@ -590,6 +642,39 @@ export function useCreateUser() {
   });
 }
 
+export function useUpdateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: UpdateUserInput) =>
+      apiPatch<{
+        id: string;
+        email: string;
+        fullName: string;
+        role: UserRole;
+        isActive: boolean;
+      }>(`/api/users/${payload.userId}`, {
+        fullName: payload.fullName,
+        email: payload.email,
+        password: payload.password,
+        role: payload.role,
+        isActive: payload.isActive,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
+export function useDeleteUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => apiDelete<{ id: string }>(`/api/users/${userId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+}
+
 export function useUpdatePermissions() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -624,6 +709,9 @@ export type EquipmentDetail = {
   commissionedAt: string | null;
   isActive: boolean;
   usageUnit: "HOURS" | "KM";
+  previousCheckCode: string | null;
+  previousCheckDate: string | null;
+  previousCheckHours: number | null;
   checkRules: Array<{
     id: string;
     code: string;
@@ -776,6 +864,9 @@ export function useUpdateEquipment() {
       commissionedAt?: string | null;
       isActive?: boolean;
       usageUnit?: "HOURS" | "KM";
+      previousCheckCode?: string | null;
+      previousCheckDate?: string | null;
+      previousCheckHours?: number | null;
     }) =>
       apiPatch<{ id: string; equipmentNumber: string; displayName: string }>(
         `/api/equipment/${payload.equipmentId}`,
@@ -788,6 +879,9 @@ export function useUpdateEquipment() {
           commissionedAt: payload.commissionedAt,
           isActive: payload.isActive,
           usageUnit: payload.usageUnit,
+          previousCheckCode: payload.previousCheckCode,
+          previousCheckDate: payload.previousCheckDate,
+          previousCheckHours: payload.previousCheckHours,
         }
       ),
     onSuccess: () => {
@@ -819,6 +913,7 @@ export type CheckRuleItem = {
   issueOffsetHours: number;
   nearOffsetHours: number;
   isActive: boolean;
+  isOneTime?: boolean;
   templatePdfPath?: string | null;
 };
 
@@ -839,12 +934,14 @@ export function useCreateCheckRule() {
       intervalHours: number;
       intervalTimeValue?: number;
       intervalTimeUnit?: "MONTHS" | "YEARS";
+      isOneTime?: boolean;
     }) =>
       apiPost<CheckRuleItem>(`/api/equipment/${payload.equipmentId}/check-rules`, {
         code: payload.code,
         intervalHours: payload.intervalHours,
         intervalTimeValue: payload.intervalTimeValue,
         intervalTimeUnit: payload.intervalTimeUnit,
+        isOneTime: payload.isOneTime,
       }),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["equipment", "checkRules", variables.equipmentId] });
@@ -863,6 +960,7 @@ export function useUpdateCheckRule() {
       isActive?: boolean;
       intervalTimeValue?: number | null;
       intervalTimeUnit?: "MONTHS" | "YEARS" | null;
+      isOneTime?: boolean;
     }) =>
       apiPatch<CheckRuleItem>(
         `/api/equipment/${payload.equipmentId}/check-rules/${payload.ruleId}`,
@@ -871,6 +969,7 @@ export function useUpdateCheckRule() {
           isActive: payload.isActive,
           intervalTimeValue: payload.intervalTimeValue,
           intervalTimeUnit: payload.intervalTimeUnit,
+          isOneTime: payload.isOneTime,
         }
       ),
     onSuccess: (_, variables) => {

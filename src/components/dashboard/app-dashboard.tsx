@@ -11,11 +11,13 @@ import {
   useApproveEntriesByDate,
   useRejectEntriesByDate,
   useCheckSheets,
+  useCheckSheetsPaginated,
   useCreateEntry,
   useCreateEntriesBulk,
   useCreateEquipment,
   useCreateGrounding,
   useCreateUser,
+  useDeleteUser,
   useDeleteEntry,
   useForecastDrift,
   useForecastMetrics,
@@ -34,6 +36,7 @@ import {
   useUpdateCheckSheet,
   useUpdateEntry,
   useUpdatePermissions,
+  useUpdateUser,
   useUpdateSystemConfig,
   useUsers,
   useEquipmentDetail,
@@ -803,6 +806,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const users = useUsers(isSuperadmin);
   const permissionCatalog = usePermissionCatalog(isSuperadmin);
   const createUser = useCreateUser();
+  const updateUser = useUpdateUser();
+  const deleteUser = useDeleteUser();
   const updatePermissions = useUpdatePermissions();
   const createEquipment = useCreateEquipment();
   const createEntry = useCreateEntry();
@@ -824,9 +829,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
   useEffect(() => {
     if (systemConfig.data) {
-      setApproachingHours(String(systemConfig.data.approachingOffsetHours));
-      setIssueHours(String(systemConfig.data.issueOffsetHours));
-      setNearHours(String(systemConfig.data.nearOffsetHours));
+      setApproachingHours(String(systemConfig.data.approachingOffsetDays));
+      setIssueHours(String(systemConfig.data.issueOffsetDays));
+      setNearHours(String(systemConfig.data.nearOffsetDays));
       setSectionCode((systemConfig.data as any).sectionCode || "");
       setEmailEnabled(systemConfig.data.emailEnabled);
       setEmailSendOnIssue((systemConfig.data as any).emailSendOnIssue ?? true);
@@ -904,6 +909,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<UserRole>("USER");
+  const [editingUserId, setEditingUserId] = useState("");
+  const [editUserName, setEditUserName] = useState("");
+  const [editUserEmail, setEditUserEmail] = useState("");
+  const [editUserPassword, setEditUserPassword] = useState("");
+  const [editUserRole, setEditUserRole] = useState<UserRole>("USER");
+  const [editUserIsActive, setEditUserIsActive] = useState(true);
   const [permissionUserId, setPermissionUserId] = useState("");
   const [permissionMap, setPermissionMap] = useState<Record<string, boolean>>({});
   const [alertFilter, setAlertFilter] = useState<"ALL" | "APPROACHING" | "ISSUE_REQUIRED" | "NEAR_DUE" | "OVERDUE">("ALL");
@@ -920,9 +931,14 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [checkEquipmentSearch, setCheckEquipmentSearch] = useState("");
   const [checkCodeFilter, setCheckCodeFilter] = useState("");
   const [checkTriggerTypeFilter, setCheckTriggerTypeFilter] = useState<"ALL" | "HOURS" | "CALENDAR">("ALL");
-  const [approachingHours, setApproachingHours] = useState("120");
-  const [issueHours, setIssueHours] = useState("40");
-  const [nearHours, setNearHours] = useState("10");
+  const [overviewChecksPage, setOverviewChecksPage] = useState(1);
+  const [upcomingChecksPage, setUpcomingChecksPage] = useState(1);
+  const [ongoingChecksPage, setOngoingChecksPage] = useState(1);
+  const [completedChecksPage, setCompletedChecksPage] = useState(1);
+  const checksPageSize = 15;
+  const [approachingHours, setApproachingHours] = useState("15");
+  const [issueHours, setIssueHours] = useState("5");
+  const [nearHours, setNearHours] = useState("1.25");
   const [sectionCode, setSectionCode] = useState("");
   const [emailEnabled, setEmailEnabled] = useState(false);
   const [emailSendOnIssue, setEmailSendOnIssue] = useState(true);
@@ -936,6 +952,13 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [emailTemplateSubject, setEmailTemplateSubject] = useState("");
   const [emailTemplateBody, setEmailTemplateBody] = useState("");
   const [emailReminderDaysBefore, setEmailReminderDaysBefore] = useState("3");
+
+  useEffect(() => {
+    setOverviewChecksPage(1);
+    setUpcomingChecksPage(1);
+    setOngoingChecksPage(1);
+    setCompletedChecksPage(1);
+  }, [checkFilter, checkDateFrom, checkDateTo, checkEquipmentSearch, checkCodeFilter, checkTriggerTypeFilter]);
   const [historyExportEquipmentFrom, setHistoryExportEquipmentFrom] = useState("");
   const [historyExportEquipmentTo, setHistoryExportEquipmentTo] = useState("");
   const [historyExportDateFrom, setHistoryExportDateFrom] = useState("");
@@ -984,6 +1007,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [editCommissionedAt, setEditCommissionedAt] = useState("");
   const [editIsActive, setEditIsActive] = useState(true);
   const [editUsageUnit, setEditUsageUnit] = useState<"HOURS" | "KM">("HOURS");
+  const [editPreviousCheckCode, setEditPreviousCheckCode] = useState("");
+  const [editPreviousCheckDate, setEditPreviousCheckDate] = useState("");
+  const [editPreviousCheckHours, setEditPreviousCheckHours] = useState("");
   const [createUsageUnit, setCreateUsageUnit] = useState<"HOURS" | "KM">("HOURS");
   const [checkRuleCode, setCheckRuleCode] = useState("A");
   const [checkRuleIntervalHours, setCheckRuleIntervalHours] = useState("500");
@@ -997,7 +1023,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [checkSheetStatus, setCheckSheetStatus] = useState<"PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE">("PREDICTED");
   const [checkSheetIssuedAt, setCheckSheetIssuedAt] = useState("");
   const [checkSheetCompletedAt, setCheckSheetCompletedAt] = useState("");
-  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{ type: "equipment" | "checkRule" | "checkSheet" | "entry"; id: string; name: string; onConfirm: () => void } | null>(null);
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<{ type: "equipment" | "checkRule" | "checkSheet" | "entry" | "user"; id: string; name: string; onConfirm: () => void } | null>(null);
 
   const equipmentDetail = useEquipmentDetail(selectedEquipmentForMgmt);
   const groundingPeriods = useGroundingPeriods(selectedEquipmentForMgmt);
@@ -1081,6 +1107,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [planExportMode, setPlanExportMode] = useState<"equipment" | "detailed" | "pictorial">("equipment");
   const [planRefreshBusy, setPlanRefreshBusy] = useState(false);
   const [planRefreshResult, setPlanRefreshResult] = useState<{ year: number; equipmentCount: number } | null>(null);
+  const [refreshAllBusy, setRefreshAllBusy] = useState(false);
+  const [refreshAllResult, setRefreshAllResult] = useState<{ equipmentCount: number; years: number[]; impliedCompletedCreated: number } | null>(null);
   const [selectedHistoryCheck, setSelectedHistoryCheck] = useState<{
     id: string;
     checkCode: string;
@@ -1259,6 +1287,11 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       setEditCommissionedAt(equipmentDetail.data.commissionedAt ? equipmentDetail.data.commissionedAt.slice(0, 10) : "");
       setEditIsActive(equipmentDetail.data.isActive);
       setEditUsageUnit(equipmentDetail.data.usageUnit);
+      setEditPreviousCheckCode(equipmentDetail.data.previousCheckCode ?? "");
+      setEditPreviousCheckDate(equipmentDetail.data.previousCheckDate ?? "");
+      setEditPreviousCheckHours(
+        equipmentDetail.data.previousCheckHours != null ? String(equipmentDetail.data.previousCheckHours) : "",
+      );
     }
   }, [showEquipmentEditModal, equipmentDetail.data]);
 
@@ -1298,6 +1331,50 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
   const plan = useEquipmentPlan(selectedEquipmentId, year);
   const forecastMetrics = useForecastMetrics(selectedEquipmentId);
+  const overviewChecks = useCheckSheetsPaginated(
+    {
+      page: overviewChecksPage,
+      pageSize: checksPageSize,
+      status: checkFilter,
+      equipmentSearch: checkEquipmentSearch,
+      checkCode: checkCodeFilter,
+      triggerType: checkTriggerTypeFilter,
+      dateFrom: checkDateFrom,
+      dateTo: checkDateTo,
+      openOnly: true,
+    },
+    activeSection === "overview",
+  );
+  const upcomingChecks = useCheckSheetsPaginated(
+    {
+      page: upcomingChecksPage,
+      pageSize: checksPageSize,
+      status: checkFilter,
+      equipmentSearch: checkEquipmentSearch,
+      checkCode: checkCodeFilter,
+      triggerType: checkTriggerTypeFilter,
+      dateFrom: checkDateFrom,
+      dateTo: checkDateTo,
+      openOnly: true,
+    },
+    activeSection === "checks",
+  );
+  const ongoingChecks = useCheckSheetsPaginated(
+    {
+      page: ongoingChecksPage,
+      pageSize: checksPageSize,
+      status: "ISSUED",
+    },
+    activeSection === "ongoing-checks",
+  );
+  const completedChecks = useCheckSheetsPaginated(
+    {
+      page: completedChecksPage,
+      pageSize: checksPageSize,
+      status: "COMPLETED",
+    },
+    activeSection === "completed-checks",
+  );
   const equipmentOptions = equipments.data ?? [];
   const bulkEquipmentList = useMemo(
     () =>
@@ -1822,6 +1899,50 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     );
   };
 
+  const onEditUser = (userId: string) => {
+    const target = (users.data ?? []).find((u) => u.id === userId);
+    if (!target) {
+      return;
+    }
+    setEditingUserId(userId);
+    setEditUserName(target.fullName);
+    setEditUserEmail(target.email);
+    setEditUserPassword("");
+    setEditUserRole(target.role);
+    setEditUserIsActive(target.isActive);
+  };
+
+  const onSaveUser = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingUserId) {
+      return;
+    }
+    updateUser.mutate(
+      {
+        userId: editingUserId,
+        fullName: editUserName,
+        email: editUserEmail,
+        password: editUserPassword.trim() ? editUserPassword : undefined,
+        role: editUserRole,
+        isActive: editUserIsActive,
+      },
+      {
+        onSuccess: () => {
+          toast.success("User updated successfully");
+          setEditingUserId("");
+          setEditUserName("");
+          setEditUserEmail("");
+          setEditUserPassword("");
+          setEditUserRole("USER");
+          setEditUserIsActive(true);
+        },
+        onError: (error) => {
+          toast.error(error instanceof Error ? error.message : "Failed to update user");
+        },
+      },
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#f4f7fb] via-[#e7eef8] to-[#f4f7fb]">
       <div className="fixed inset-0 bg-[radial-gradient(circle_at_10%_20%,rgba(11,61,145,0.15),transparent_50%),radial-gradient(circle_at_90%_80%,rgba(215,38,61,0.12),transparent_50%)] pointer-events-none" />
@@ -2083,6 +2204,19 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
               </div>
 
               <Card title="Upcoming Maintenance Checks">
+                  {overviewChecks.isLoading ? (
+                    <div className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">
+                      Loading upcoming checks...
+                    </div>
+                  ) : (
+                    <>
+                  {(() => {
+                    const overviewItems = overviewChecks.data?.items ?? [];
+                    const overviewTotal = overviewChecks.data?.total ?? 0;
+                    const overviewTotalPages = overviewChecks.data?.totalPages ?? 1;
+                    const allCodes = Array.from(new Set(overviewItems.map((c) => c.checkCode).sort()));
+                    return (
+                      <>
                   <div className="mb-4 space-y-4">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
                       <div>
@@ -2117,7 +2251,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                         >
                           <option value="">All Codes</option>
-                          {Array.from(new Set(allChecks.map(c => c.checkCode).sort())).map(code => (
+                          {allCodes.map(code => (
                             <option key={code} value={code}>Check {code}</option>
                           ))}
                         </select>
@@ -2157,7 +2291,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-semibold text-[var(--color-text-soft)]">
-                          Showing {filteredChecks.length} of {allChecks.filter((check) => check.status !== "ISSUED" && check.status !== "COMPLETED").length} upcoming checks
+                          Showing {overviewItems.length} of {overviewTotal} upcoming checks
                         </span>
                         {(checkDateFrom || checkDateTo || checkEquipmentSearch || checkCodeFilter || checkTriggerTypeFilter !== "ALL" || checkFilter !== "ALL") && (
                           <button
@@ -2211,50 +2345,79 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       </button>
                     </div>
                   </div>
-                  <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
-                    {filteredChecks.map((check) => {
-                      const colors = getStatusColor(check.status);
-                      const daysUntilDue = Math.ceil((new Date(check.dueDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-                      return (
-                        <div 
-                          key={check.id} 
-                          className={`group rounded-lg border-2 bg-gradient-to-br ${colors.bg} ${colors.border} p-4 shadow-sm transition-all hover:shadow-md hover:scale-[1.01] cursor-pointer`}
-                          onClick={() => setSelectedEquipmentModal(check.equipmentId)}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                <span className={`px-3 py-1 rounded-full text-xs font-bold ${colors.badge} whitespace-nowrap`}>
-                                  {daysUntilDue > 0 ? `${daysUntilDue} days` : daysUntilDue === 0 ? "Due today" : `${Math.abs(daysUntilDue)} days overdue`}
-                                </span>
-                                <p className={`text-base font-bold ${colors.text}`}>{check.equipmentNumber}</p>
-                                <span className="px-2 py-0.5 rounded-full bg-white/70 text-[10px] font-bold">
-                                  Check {check.checkCode}
-                                </span>
-                                <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase whitespace-nowrap ${colors.badge}`}>
+                  <div className="overflow-x-auto rounded-lg border border-[var(--color-surface-strong)] bg-white">
+                    <table className="w-full text-sm">
+                      <thead className="bg-[var(--color-surface)] text-left text-xs font-bold uppercase tracking-wide text-[var(--color-text-soft)]">
+                        <tr>
+                          <th className="px-3 py-2">Equipment</th>
+                          <th className="px-3 py-2">Check</th>
+                          <th className="px-3 py-2">Status</th>
+                          <th className="px-3 py-2">Due In</th>
+                          <th className="px-3 py-2">Due Date</th>
+                          <th className="px-3 py-2">Trigger</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {overviewItems.map((check) => {
+                          const colors = getStatusColor(check.status);
+                          const daysUntilDue = Math.ceil((new Date(check.dueDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+                          return (
+                            <tr
+                              key={check.id}
+                              onClick={() => setSelectedEquipmentModal(check.equipmentId)}
+                              className="cursor-pointer border-t border-[var(--color-surface-strong)] hover:bg-[var(--color-surface)]/50"
+                            >
+                              <td className="px-3 py-2 font-semibold">{check.equipmentNumber}</td>
+                              <td className="px-3 py-2">Check {check.checkCode}</td>
+                              <td className="px-3 py-2">
+                                <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${colors.badge}`}>
                                   {getStatusLabel(check.status)}
                                 </span>
-                              </div>
-                              <div className="space-y-1.5">
-                                <p className={`text-sm font-semibold ${colors.text}`}>
-                                  Due: {formatDate(check.dueDate)} at {check.dueHours.toFixed(0)} {check.usageUnit === "KM" ? "km" : "hours"}
-                                </p>
-                                <p className={`text-xs font-medium ${colors.text} opacity-75`}>
-                                  {check.triggerType === "HOURS" ? "Hours-based" : "Calendar-based"}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    {filteredChecks.length === 0 && (
-                      <div className="py-12 text-center">
-                        <p className="text-sm font-medium text-[var(--color-text-soft)]">No checks found</p>
-                        <p className="text-xs text-[var(--color-text-soft)] mt-1">All maintenance checks are up to date</p>
-                      </div>
+                              </td>
+                              <td className="px-3 py-2 font-semibold">
+                                {daysUntilDue > 0 ? `${daysUntilDue} days` : daysUntilDue === 0 ? "Due today" : `${Math.abs(daysUntilDue)} overdue`}
+                              </td>
+                              <td className="px-3 py-2">
+                                {formatDate(check.dueDate)} ({check.dueHours.toFixed(0)} {check.usageUnit === "KM" ? "km" : "hours"})
+                              </td>
+                              <td className="px-3 py-2">{check.triggerType === "HOURS" ? "Hours" : "Calendar"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    {overviewItems.length === 0 && (
+                      <div className="py-10 text-center text-sm text-[var(--color-text-soft)]">No checks found</div>
                     )}
                   </div>
+                  <div className="mt-4 flex items-center justify-between rounded-lg border border-[var(--color-surface-strong)] bg-white px-3 py-2">
+                    <span className="text-xs font-semibold text-[var(--color-text-soft)]">
+                      Page {overviewChecksPage} of {overviewTotalPages}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={overviewChecksPage <= 1}
+                        onClick={() => setOverviewChecksPage((p) => Math.max(1, p - 1))}
+                        className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        type="button"
+                        disabled={overviewChecksPage >= overviewTotalPages}
+                        onClick={() => setOverviewChecksPage((p) => Math.min(overviewTotalPages, p + 1))}
+                        className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                      </>
+                    );
+                  })()}
+                  </>
+                )}
                 </Card>
 
               {selectedEquipmentModal && selectedEquipment && (
@@ -3214,6 +3377,45 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                   <div className="flex flex-wrap justify-end gap-2">
                     <button
                       type="button"
+                      disabled={refreshAllBusy}
+                      onClick={async () => {
+                        setRefreshAllBusy(true);
+                        setRefreshAllResult(null);
+                        try {
+                          const fromYear = year - 2;
+                          const toYear = year;
+                          const res = await fetch(apiPath(`/api/system/refresh-all?fromYear=${fromYear}&toYear=${toYear}`), { method: "POST" });
+                          const payload = await res.json();
+                          if (!res.ok) {
+                            const msg =
+                              payload?.error?.message ||
+                              payload?.message ||
+                              "Refresh all failed";
+                            toast.error(msg);
+                            return;
+                          }
+                          const data = payload?.data ?? payload;
+                          const normalized = {
+                            equipmentCount: Number(data?.equipmentCount ?? 0),
+                            years: Array.isArray(data?.years) ? data.years : [],
+                            impliedCompletedCreated: Number(data?.impliedCompletedCreated ?? 0),
+                          };
+                          setRefreshAllResult(normalized);
+                          toast.success(
+                            `Refreshed ${normalized.equipmentCount} equipments (${normalized.years.join(", ") || "-"})`,
+                          );
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : "Refresh all failed");
+                        } finally {
+                          setRefreshAllBusy(false);
+                        }
+                      }}
+                      className="inline-flex items-center rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-2 text-sm font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {refreshAllBusy ? "Refreshing All..." : `Refresh All (${year - 2}-${year})`}
+                    </button>
+                    <button
+                      type="button"
                       disabled={planRefreshBusy}
                       onClick={async () => {
                         setPlanRefreshBusy(true);
@@ -3229,8 +3431,13 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             toast.error(msg);
                             return;
                           }
-                          setPlanRefreshResult(payload);
-                          toast.success(`Plan refreshed for ${payload.equipmentCount} equipments (${payload.year})`);
+                          const data = payload?.data ?? payload;
+                          const normalized = {
+                            year: Number(data?.year ?? year),
+                            equipmentCount: Number(data?.equipmentCount ?? 0),
+                          };
+                          setPlanRefreshResult(normalized);
+                          toast.success(`Plan refreshed for ${normalized.equipmentCount} equipments (${normalized.year})`);
                         } catch (e) {
                           toast.error(e instanceof Error ? e.message : "Refresh failed");
                         } finally {
@@ -3273,16 +3480,24 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       Refreshed {planRefreshResult.equipmentCount} equipments for {planRefreshResult.year}
                     </p>
                   )}
+                  {refreshAllResult && (
+                    <p className="text-xs font-semibold text-[var(--color-text-soft)] text-right">
+                      Refreshed {refreshAllResult.equipmentCount} equipments for {refreshAllResult.years.join(", ")}. Baseline completions created {refreshAllResult.impliedCompletedCreated}
+                    </p>
+                  )}
                 </div>
               </Card>
 
               {selectedEquipmentId && forecastMetrics.data && (
                 <Card title="Forecast Metrics">
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
                     <div className="rounded-xl border-2 border-[var(--color-primary)]/20 bg-gradient-to-br from-[var(--color-primary)]/10 to-white p-4 shadow-md">
-                      <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-primary)]">Forecast Avg</p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-primary)]">Expected Daily Usage</p>
                       <p className="mt-2 text-2xl font-bold text-[var(--color-text)]">
                         {forecastMetrics.data.forecastAverageHoursPerDay.toFixed(2)}h
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-[var(--color-text-soft)]">
+                        Estimated run rate per day
                       </p>
                     </div>
                     <div className="rounded-xl border-2 border-[var(--color-primary)]/20 bg-gradient-to-br from-[var(--color-primary)]/10 to-white p-4 shadow-md">
@@ -3290,13 +3505,47 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       <p className="mt-2 text-sm font-bold text-[var(--color-text)]">
                         {forecastMetrics.data.confidenceLowHoursPerDay.toFixed(2)} - {forecastMetrics.data.confidenceHighHoursPerDay.toFixed(2)}h
                       </p>
-                    </div>
-                    <div className="rounded-xl border-2 border-[var(--color-accent)]/20 bg-gradient-to-br from-[var(--color-accent)]/10 to-white p-4 shadow-md">
-                      <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-accent)]">MAPE</p>
-                      <p className="mt-2 text-2xl font-bold text-[var(--color-text)]">
-                        {forecastMetrics.data.meanAbsolutePercentageError.toFixed(2)}%
+                      <p className="mt-1 text-xs font-medium text-[var(--color-text-soft)]">
+                        Most likely daily usage interval
                       </p>
                     </div>
+                    <div className="rounded-xl border-2 border-[var(--color-accent)]/20 bg-gradient-to-br from-[var(--color-accent)]/10 to-white p-4 shadow-md">
+                      <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-accent)]">Accuracy</p>
+                      <p className="mt-2 text-2xl font-bold text-[var(--color-text)]">
+                        {Math.max(0, 100 - forecastMetrics.data.meanAbsolutePercentageError).toFixed(1)}%
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-[var(--color-text-soft)]">
+                        Based on recent prediction vs actual
+                      </p>
+                    </div>
+                    <div className="rounded-xl border-2 border-[var(--color-accent)]/20 bg-gradient-to-br from-[var(--color-accent)]/10 to-white p-4 shadow-md">
+                      <p className="text-xs font-bold uppercase tracking-wide text-[var(--color-accent)]">Error</p>
+                      <p className="mt-2 text-2xl font-bold text-[var(--color-text)]">
+                        {forecastMetrics.data.meanAbsolutePercentageError.toFixed(1)}%
+                      </p>
+                      <p className="mt-1 text-xs font-medium text-[var(--color-text-soft)]">
+                        Average forecast miss
+                      </p>
+                    </div>
+                  </div>
+                  <div className="mt-3 rounded-lg border border-[var(--color-surface-strong)] bg-white p-3 text-xs font-medium text-[var(--color-text-soft)]">
+                    Confidence:{" "}
+                    <span className="font-bold text-[var(--color-text)]">
+                      {forecastMetrics.data.meanAbsolutePercentageError <= 10
+                        ? "High"
+                        : forecastMetrics.data.meanAbsolutePercentageError <= 20
+                          ? "Medium"
+                          : "Low"}
+                    </span>
+                    {" • "}
+                    Sample Size:{" "}
+                    <span className="font-bold text-[var(--color-text)]">{forecastMetrics.data.sampleSize}</span>
+                    {" • "}
+                    MAE:{" "}
+                    <span className="font-bold text-[var(--color-text)]">{forecastMetrics.data.meanAbsoluteError.toFixed(2)}h</span>
+                    {" • "}
+                    MAPE:{" "}
+                    <span className="font-bold text-[var(--color-text)]">{forecastMetrics.data.meanAbsolutePercentageError.toFixed(2)}%</span>
                   </div>
                 </Card>
               )}
@@ -3305,55 +3554,41 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
           {activeSection === "checks" && (
             <Card title="Upcoming Checks">
-              {checksheets.isLoading ? (
+              {upcomingChecks.isLoading ? (
                 <div className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">
                   Loading checksheets...
                 </div>
-              ) : checksheets.data && checksheets.data.length > 0 ? (
+              ) : (
                 <>
                   {(() => {
-                    const allChecks = checksheets.data ?? [];
-                    const filteredChecks = allChecks.filter((sheet) => {
-                      if (sheet.status === "ISSUED" || sheet.status === "COMPLETED") {
-                        return false;
+                    const filteredChecks = upcomingChecks.data?.items ?? [];
+                    const totalChecks = upcomingChecks.data?.total ?? 0;
+                    const totalPages = upcomingChecks.data?.totalPages ?? 1;
+                    const statusPriority: Record<
+                      "OVERDUE" | "NEAR_DUE" | "ISSUE_REQUIRED" | "PREDICTED",
+                      number
+                    > = {
+                      OVERDUE: 0,
+                      NEAR_DUE: 1,
+                      ISSUE_REQUIRED: 2,
+                      PREDICTED: 3,
+                    };
+                    const sortedChecks = [...filteredChecks].sort((a, b) => {
+                      const nowTs = Date.now();
+                      const daysA = Math.ceil((new Date(a.dueDate).getTime() - nowTs) / (1000 * 60 * 60 * 24));
+                      const daysB = Math.ceil((new Date(b.dueDate).getTime() - nowTs) / (1000 * 60 * 60 * 24));
+                      if (daysA !== daysB) {
+                        return daysA - daysB;
                       }
-                      if (checkFilter !== "ALL" && sheet.status !== checkFilter) {
-                        return false;
+                      const priorityA = statusPriority[a.status as keyof typeof statusPriority] ?? 99;
+                      const priorityB = statusPriority[b.status as keyof typeof statusPriority] ?? 99;
+                      if (priorityA !== priorityB) {
+                        return priorityA - priorityB;
                       }
-                      if (checkEquipmentSearch) {
-                        const search = checkEquipmentSearch.toLowerCase();
-                        if (
-                          !sheet.equipmentNumber.toLowerCase().includes(search) &&
-                          !sheet.equipmentName.toLowerCase().includes(search)
-                        ) {
-                          return false;
-                        }
-                      }
-                      if (checkCodeFilter) {
-                        if (sheet.checkCode.toUpperCase() !== checkCodeFilter.toUpperCase()) {
-                          return false;
-                        }
-                      }
-                      if (checkTriggerTypeFilter !== "ALL" && sheet.triggerType !== checkTriggerTypeFilter) {
-                        return false;
-                      }
-                      if (checkDateFrom) {
-                        const from = new Date(checkDateFrom);
-                        if (new Date(sheet.dueDate) < from) {
-                          return false;
-                        }
-                      }
-                      if (checkDateTo) {
-                        const to = new Date(checkDateTo);
-                        to.setHours(23, 59, 59, 999);
-                        if (new Date(sheet.dueDate) > to) {
-                          return false;
-                        }
-                      }
-                      return true;
+                      return equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber);
                     });
 
-                    const allCodes = Array.from(new Set(allChecks.map((c) => c.checkCode).sort()));
+                    const allCodes = Array.from(new Set(filteredChecks.map((c) => c.checkCode).sort()));
 
                     return (
                       <>
@@ -3433,7 +3668,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           <div className="flex items-center justify-between flex-wrap gap-2">
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-semibold text-[var(--color-text-soft)]">
-                                Showing {filteredChecks.length} of {allChecks.length} checks
+                                Showing {filteredChecks.length} of {totalChecks} checks
                               </span>
                               {(checkDateFrom ||
                                 checkDateTo ||
@@ -3459,105 +3694,106 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             </div>
                           </div>
                         </div>
-                        <div className="space-y-3 max-h-[600px] overflow-y-auto">
-                          {filteredChecks.map((sheet) => {
-                            const colors = getStatusColor(sheet.status);
-                            const daysUntilDue = Math.ceil(
-                              (new Date(sheet.dueDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)
-                            );
-                            return (
-                              <div
-                                key={sheet.id}
-                                className={`group rounded-xl border-2 bg-gradient-to-br ${colors.bg} ${colors.border} ${colors.text} p-5 shadow-md transition-all hover:shadow-xl`}
-                              >
-                                <div className="flex items-start justify-between">
-                                  <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${colors.badge} whitespace-nowrap`}>
-                                        {daysUntilDue > 0
-                                          ? `${daysUntilDue} days`
-                                          : daysUntilDue === 0
-                                          ? "Due today"
-                                          : `${Math.abs(daysUntilDue)} days overdue`}
-                                      </span>
-                                      <p className={`text-sm font-bold ${colors.text}`}>{sheet.equipmentNumber}</p>
-                                      <span className="px-2 py-0.5 rounded-full bg-white/50 text-[10px] font-bold">
-                                        Check {sheet.checkCode}
-                                      </span>
-                                      <span
-                                        className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase whitespace-nowrap ${colors.badge}`}
-                                      >
+                        <div className="overflow-x-auto rounded-lg border border-[var(--color-surface-strong)] bg-white">
+                          <table className="w-full text-sm">
+                            <thead className="bg-[var(--color-surface)] text-left text-xs font-bold uppercase tracking-wide text-[var(--color-text-soft)]">
+                              <tr>
+                                <th className="px-3 py-2">Equipment</th>
+                                <th className="px-3 py-2">Check</th>
+                                <th className="px-3 py-2">Status</th>
+                                <th className="px-3 py-2">Due In</th>
+                                <th className="px-3 py-2">Due Date</th>
+                                <th className="px-3 py-2">Trigger</th>
+                                <th className="px-3 py-2 text-right">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {sortedChecks.map((sheet) => {
+                                const colors = getStatusColor(sheet.status);
+                                const daysUntilDue = Math.ceil(
+                                  (new Date(sheet.dueDate).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24),
+                                );
+                                return (
+                                  <tr key={sheet.id} className="border-t border-[var(--color-surface-strong)] hover:bg-[var(--color-surface)]/50">
+                                    <td className="px-3 py-2 font-semibold">{sheet.equipmentNumber}</td>
+                                    <td className="px-3 py-2">Check {sheet.checkCode}</td>
+                                    <td className="px-3 py-2">
+                                      <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${colors.badge}`}>
                                         {getStatusLabel(sheet.status)}
                                       </span>
-                                    </div>
-                                    <div className="space-y-1">
-                                      <p className={`text-xs font-medium ${colors.text}`}>
-                                        Due Date: {formatDate(sheet.dueDate)} at {sheet.dueHours.toFixed(0)} {sheet.usageUnit === "KM" ? "km" : "hours"}
-                                      </p>
-                                      <p className={`text-[10px] font-medium ${colors.text} opacity-70`}>
-                                        {sheet.triggerType === "HOURS" ? "Hours-based trigger" : "Calendar-based trigger"}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-2 ml-4">
-                                    {sheet.status !== "ISSUED" && sheet.status !== "COMPLETED" && (
+                                    </td>
+                                    <td className="px-3 py-2 font-semibold">
+                                      {daysUntilDue > 0 ? `${daysUntilDue} days` : daysUntilDue === 0 ? "Due today" : `${Math.abs(daysUntilDue)} overdue`}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      {formatDate(sheet.dueDate)} ({sheet.dueHours.toFixed(0)} {sheet.usageUnit === "KM" ? "km" : "hours"})
+                                    </td>
+                                    <td className="px-3 py-2">{sheet.triggerType === "HOURS" ? "Hours" : "Calendar"}</td>
+                                    <td className="px-3 py-2 text-right">
                                       <button
                                         type="button"
                                         onClick={() => {
                                           setIssueModalCheck(sheet);
                                           setIssueDate(new Date().toISOString().slice(0, 10));
                                         }}
-                                        className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
+                                        className="rounded-md bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-2.5 py-1 text-xs font-bold text-white"
                                       >
-                                        Issue Check
+                                        Issue
                                       </button>
-                                    )}
-                                    {sheet.status === "ISSUED" && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setCompleteModalCheck(sheet);
-                                          setCompleteDate(new Date().toISOString().slice(0, 10));
-                                        }}
-                                        className="rounded-lg bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
-                                      >
-                                        Mark Complete
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                           {filteredChecks.length === 0 && (
-                            <div className="py-12 text-center">
-                              <p className="text-sm font-medium text-[var(--color-text-soft)]">No maintenance checks found</p>
-                              <p className="text-xs text-[var(--color-text-soft)] mt-1">All maintenance checks are up to date</p>
+                            <div className="py-10 text-center text-sm text-[var(--color-text-soft)]">
+                              No maintenance checks found
                             </div>
                           )}
+                        </div>
+                        <div className="mt-4 flex items-center justify-between rounded-lg border border-[var(--color-surface-strong)] bg-white px-3 py-2">
+                          <span className="text-xs font-semibold text-[var(--color-text-soft)]">
+                            Page {upcomingChecksPage} of {totalPages}
+                          </span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              disabled={upcomingChecksPage <= 1}
+                              onClick={() => setUpcomingChecksPage((p) => Math.max(1, p - 1))}
+                              className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                            >
+                              Previous
+                            </button>
+                            <button
+                              type="button"
+                              disabled={upcomingChecksPage >= totalPages}
+                              onClick={() => setUpcomingChecksPage((p) => Math.min(totalPages, p + 1))}
+                              className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                            >
+                              Next
+                            </button>
+                          </div>
                         </div>
                       </>
                     );
                   })()}
                 </>
-              ) : (
-                <div className="py-12 text-center">
-                  <p className="text-sm font-medium text-[var(--color-text-soft)]">No maintenance checks found</p>
-                  <p className="text-xs text-[var(--color-text-soft)] mt-1">All maintenance checks are up to date</p>
-                </div>
               )}
             </Card>
           )}
 
           {activeSection === "ongoing-checks" && (
             <Card title="Ongoing Checks">
-              {checksheets.isLoading ? (
+              {ongoingChecks.isLoading ? (
                 <div className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">
                   Loading ongoing checks...
                 </div>
-              ) : checksheets.data && checksheets.data.length > 0 ? (
+              ) : (
                 (() => {
-                  const ongoing = (checksheets.data ?? []).filter((sheet) => sheet.status === "ISSUED");
+                  const ongoing = ongoingChecks.data?.items ?? [];
+                  const totalOngoing = ongoingChecks.data?.total ?? 0;
+                  const totalOngoingPages = ongoingChecks.data?.totalPages ?? 1;
                   const filtered = ongoing.filter((sheet) => {
                     if (checkEquipmentSearch) {
                       const search = checkEquipmentSearch.toLowerCase();
@@ -3643,7 +3879,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         <div className="flex items-center justify-between flex-wrap gap-2">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-semibold text-[var(--color-text-soft)]">
-                              Showing {filtered.length} of {ongoing.length} ongoing checks
+                              Showing {filtered.length} of {totalOngoing} ongoing checks
                             </span>
                             {(checkDateFrom || checkDateTo || checkEquipmentSearch || checkCodeFilter) && (
                               <button
@@ -3715,27 +3951,47 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           </div>
                         )}
                       </div>
+                      <div className="mt-4 flex items-center justify-between rounded-lg border border-[var(--color-surface-strong)] bg-white px-3 py-2">
+                        <span className="text-xs font-semibold text-[var(--color-text-soft)]">
+                          Page {ongoingChecksPage} of {totalOngoingPages}
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={ongoingChecksPage <= 1}
+                            onClick={() => setOngoingChecksPage((p) => Math.max(1, p - 1))}
+                            className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Previous
+                          </button>
+                          <button
+                            type="button"
+                            disabled={ongoingChecksPage >= totalOngoingPages}
+                            onClick={() => setOngoingChecksPage((p) => Math.min(totalOngoingPages, p + 1))}
+                            className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
                     </>
                   );
                 })()
-              ) : (
-                <div className="py-12 text-center">
-                  <p className="text-sm font-medium text-[var(--color-text-soft)]">No ongoing checks found</p>
-                  <p className="text-xs text-[var(--color-text-soft)] mt-1">All checks are either pending or completed</p>
-                </div>
               )}
             </Card>
           )}
 
           {activeSection === "completed-checks" && (
             <Card title="Completed Checks">
-              {checksheets.isLoading ? (
+              {completedChecks.isLoading ? (
                 <div className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">
                   Loading completed checks...
                 </div>
-              ) : checksheets.data && checksheets.data.length > 0 ? (
+              ) : (
                 (() => {
-                  const completed = (checksheets.data ?? []).filter((sheet) => sheet.status === "COMPLETED");
+                  const completed = completedChecks.data?.items ?? [];
+                  const totalCompleted = completedChecks.data?.total ?? 0;
+                  const totalCompletedPages = completedChecks.data?.totalPages ?? 1;
                   const filtered = completed.filter((sheet) => {
                     if (checkEquipmentSearch) {
                       const search = checkEquipmentSearch.toLowerCase();
@@ -3821,7 +4077,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         <div className="flex items-center justify-between flex-wrap gap-2">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-semibold text-[var(--color-text-soft)]">
-                              Showing {filtered.length} of {completed.length} completed checks
+                              Showing {filtered.length} of {totalCompleted} completed checks
                             </span>
                             {(checkDateFrom || checkDateTo || checkEquipmentSearch || checkCodeFilter) && (
                               <button
@@ -3929,16 +4185,32 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           </div>
                         )}
                       </div>
+                      <div className="mt-4 flex items-center justify-between rounded-lg border border-[var(--color-surface-strong)] bg-white px-3 py-2">
+                        <span className="text-xs font-semibold text-[var(--color-text-soft)]">
+                          Page {completedChecksPage} of {totalCompletedPages}
+                        </span>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={completedChecksPage <= 1}
+                            onClick={() => setCompletedChecksPage((p) => Math.max(1, p - 1))}
+                            className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Previous
+                          </button>
+                          <button
+                            type="button"
+                            disabled={completedChecksPage >= totalCompletedPages}
+                            onClick={() => setCompletedChecksPage((p) => Math.min(totalCompletedPages, p + 1))}
+                            className="rounded-md border border-[var(--color-surface-strong)] px-3 py-1 text-xs font-semibold disabled:opacity-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
                     </>
                   );
                 })()
-              ) : (
-                <div className="py-12 text-center">
-                  <p className="text-sm font-medium text-[var(--color-text-soft)]">No completed checks found</p>
-                  <p className="text-xs text-[var(--color-text-soft)] mt-1">
-                    Completed checks will appear here after they are recorded.
-                  </p>
-                </div>
               )}
             </Card>
           )}
@@ -5909,6 +6181,38 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       />
                     </div>
                   </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Previous Check Code</label>
+                      <input
+                        type="text"
+                        maxLength={1}
+                        value={editPreviousCheckCode}
+                        onChange={(e) => setEditPreviousCheckCode(e.target.value.toUpperCase())}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Previous Check Date</label>
+                      <input
+                        type="date"
+                        value={editPreviousCheckDate}
+                        onChange={(e) => setEditPreviousCheckDate(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Previous Check Hours</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={editPreviousCheckHours}
+                        onChange={(e) => setEditPreviousCheckHours(e.target.value)}
+                        className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
+                      />
+                    </div>
+                  </div>
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Status</label>
                     <select
@@ -5935,6 +6239,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             commissionedAt: editCommissionedAt || null,
                             isActive: editIsActive,
                             usageUnit: editUsageUnit,
+                            previousCheckCode: editPreviousCheckCode.trim() || null,
+                            previousCheckDate: editPreviousCheckDate || null,
+                            previousCheckHours: editPreviousCheckHours.trim() ? Number(editPreviousCheckHours) : null,
                           },
                           {
                             onSuccess: () => {
@@ -7301,7 +7608,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           )}
 
           {showCompletedPdfUploadModal && (() => {
-            const sheet = (checksheets.data ?? []).find((s) => s.id === showCompletedPdfUploadModal);
+            const sheet =
+              (completedChecks.data?.items ?? []).find((s) => s.id === showCompletedPdfUploadModal) ??
+              (checksheets.data ?? []).find((s) => s.id === showCompletedPdfUploadModal);
             if (!sheet) return null;
             return (
               <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowCompletedPdfUploadModal(null)}>
@@ -7510,11 +7819,103 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs font-bold ${u.role === "SUPERADMIN" ? "bg-purple-100 text-purple-800" : u.role === "ADMIN" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-800"}`}>
                                 {u.role}
                               </span>
+                              <span className={`mt-1 ml-2 inline-block rounded-full px-2 py-0.5 text-xs font-bold ${u.isActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
+                                {u.isActive ? "ACTIVE" : "INACTIVE"}
+                              </span>
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => onEditUser(u.id)}
+                                className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDeleteConfirmModal({
+                                    type: "user",
+                                    id: u.id,
+                                    name: `${u.fullName} (${u.email})`,
+                                    onConfirm: () =>
+                                      deleteUser.mutate(u.id, {
+                                        onSuccess: () => {
+                                          toast.success("User deleted successfully");
+                                          if (editingUserId === u.id) {
+                                            setEditingUserId("");
+                                          }
+                                          setDeleteConfirmModal(null);
+                                        },
+                                        onError: (error) => {
+                                          toast.error(error instanceof Error ? error.message : "Failed to delete user");
+                                          setDeleteConfirmModal(null);
+                                        },
+                                      }),
+                                  });
+                                }}
+                                className="rounded-lg bg-gradient-to-r from-red-500 to-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105"
+                              >
+                                Delete
+                              </button>
                             </div>
                           </div>
                         ))}
                       </div>
                     </div>
+                    {editingUserId && (
+                      <form className="space-y-4 rounded-xl border-2 border-[var(--color-primary)]/30 bg-white p-5 shadow-md" onSubmit={onSaveUser}>
+                        <h3 className="text-lg font-bold text-[var(--color-text)]">Edit User</h3>
+                        <div>
+                          <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Full Name</label>
+                          <input required value={editUserName} onChange={(e) => setEditUserName(e.target.value)} className={inputClass} />
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Email</label>
+                          <input required type="email" value={editUserEmail} onChange={(e) => setEditUserEmail(e.target.value)} className={inputClass} />
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Role</label>
+                          <select value={editUserRole} onChange={(e) => setEditUserRole(e.target.value as UserRole)} className={inputClass}>
+                            <option value="USER">USER</option>
+                            <option value="ADMIN">ADMIN</option>
+                            <option value="SUPERADMIN">SUPERADMIN</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Password (leave blank to keep unchanged)</label>
+                          <input type="password" minLength={8} value={editUserPassword} onChange={(e) => setEditUserPassword(e.target.value)} className={inputClass} />
+                        </div>
+                        <label className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
+                          <input
+                            type="checkbox"
+                            checked={editUserIsActive}
+                            onChange={(e) => setEditUserIsActive(e.target.checked)}
+                            className="h-4 w-4 accent-[var(--color-primary)]"
+                          />
+                          Active user
+                        </label>
+                        <div className="flex gap-3">
+                          <button type="submit" className="flex-1 rounded-xl bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-4 py-3 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02]">
+                            Save Changes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingUserId("");
+                              setEditUserName("");
+                              setEditUserEmail("");
+                              setEditUserPassword("");
+                              setEditUserRole("USER");
+                              setEditUserIsActive(true);
+                            }}
+                            className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 py-3 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface)]"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </div>
                 ) : (
                   <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Superadmin access required</p>
@@ -8252,9 +8653,9 @@ Status: {{status}}`}
                     </div>
 
                     <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
-                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Check Status Threshold Hours</label>
+                      <label className="mb-3 block text-sm font-bold text-[var(--color-text)]">Check Status Threshold Days</label>
                       <p className="mb-3 text-xs text-[var(--color-text-soft)]">
-                        Configure the number of hours before a maintenance check is due when the status changes. These thresholds apply system-wide to all equipment checks.
+                        Configure the number of days before a maintenance check is due when the status changes. These thresholds apply system-wide to all equipment checks.
                       </p>
                       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                         <div>
@@ -8263,13 +8664,13 @@ Status: {{status}}`}
                             type="number"
                             min={0}
                             max={10000}
-                            step={1}
+                            step={0.1}
                             value={approachingHours}
                             onChange={(e) => setApproachingHours(e.target.value)}
                             className="h-11 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium outline-none transition-all focus:border-blue-400 focus:ring-2 focus:ring-blue-400/20 shadow-sm"
-                            placeholder="120"
+                            placeholder="15"
                           />
-                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Hours before due when status becomes 'Approaching'</p>
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Days before due when status becomes 'Approaching'</p>
                         </div>
                         <div>
                           <label className="mb-2 block text-xs font-semibold text-[var(--color-text-soft)]">Issue Required (Due)</label>
@@ -8277,13 +8678,13 @@ Status: {{status}}`}
                             type="number"
                             min={0}
                             max={10000}
-                            step={1}
+                            step={0.1}
                             value={issueHours}
                             onChange={(e) => setIssueHours(e.target.value)}
                             className="h-11 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium outline-none transition-all focus:border-red-400 focus:ring-2 focus:ring-red-400/20 shadow-sm"
-                            placeholder="40"
+                            placeholder="5"
                           />
-                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Hours before due when status becomes 'Issue Required'</p>
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Days before due when status becomes 'Issue Required'</p>
                         </div>
                         <div>
                           <label className="mb-2 block text-xs font-semibold text-[var(--color-text-soft)]">Critical (Near Due)</label>
@@ -8291,13 +8692,13 @@ Status: {{status}}`}
                             type="number"
                             min={0}
                             max={10000}
-                            step={1}
+                            step={0.1}
                             value={nearHours}
                             onChange={(e) => setNearHours(e.target.value)}
                             className="h-11 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium outline-none transition-all focus:border-orange-400 focus:ring-2 focus:ring-orange-400/20 shadow-sm"
-                            placeholder="10"
+                            placeholder="1.25"
                           />
-                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Hours before due when status becomes 'Critical'</p>
+                          <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Days before due when status becomes 'Critical'</p>
                         </div>
                       </div>
                       <button
@@ -8305,13 +8706,13 @@ Status: {{status}}`}
                         onClick={() =>
                           updateSystemConfig.mutate(
                             {
-                              approachingOffsetHours: Number(approachingHours),
-                              issueOffsetHours: Number(issueHours),
-                              nearOffsetHours: Number(nearHours),
+                              approachingOffsetDays: Number(approachingHours),
+                              issueOffsetDays: Number(issueHours),
+                              nearOffsetDays: Number(nearHours),
                             },
                             {
                               onSuccess: () => {
-                                toast.success("Status threshold hours updated successfully");
+                                toast.success("Status threshold days updated successfully");
                               },
                               onError: (error) => {
                                 toast.error(error instanceof Error ? error.message : "Failed to update configuration");
@@ -8328,18 +8729,18 @@ Status: {{status}}`}
                         }
                         className="mt-4 w-full rounded-xl bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[var(--color-primary)]/30 transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {systemConfig.isLoading ? "Saving..." : "Save Threshold Hours"}
+                        {systemConfig.isLoading ? "Saving..." : "Save Threshold Days"}
                       </button>
                       {systemConfig.data && (
                         <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                           <p className="font-medium text-[var(--color-text-soft)]">
-                            Approaching: <span className="font-bold text-[var(--color-text)]">{systemConfig.data.approachingOffsetHours} hours</span>
+                            Approaching: <span className="font-bold text-[var(--color-text)]">{systemConfig.data.approachingOffsetDays} days</span>
                           </p>
                           <p className="font-medium text-[var(--color-text-soft)]">
-                            Issue Required: <span className="font-bold text-[var(--color-text)]">{systemConfig.data.issueOffsetHours} hours</span>
+                            Issue Required: <span className="font-bold text-[var(--color-text)]">{systemConfig.data.issueOffsetDays} days</span>
                           </p>
                           <p className="font-medium text-[var(--color-text-soft)]">
-                            Critical: <span className="font-bold text-[var(--color-text)]">{systemConfig.data.nearOffsetHours} hours</span>
+                            Critical: <span className="font-bold text-[var(--color-text)]">{systemConfig.data.nearOffsetDays} days</span>
                           </p>
                         </div>
                       )}

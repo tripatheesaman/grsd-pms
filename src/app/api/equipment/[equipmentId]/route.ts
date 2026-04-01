@@ -4,6 +4,7 @@ import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
+import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
 
 import { UsageUnit } from "@prisma/client";
 
@@ -16,6 +17,9 @@ const updateEquipmentSchema = z.object({
   commissionedAt: z.string().datetime().optional().nullable(),
   isActive: z.boolean().optional(),
   usageUnit: z.nativeEnum(UsageUnit).optional(),
+  previousCheckCode: z.string().regex(/^[A-Z]$/).optional().nullable(),
+  previousCheckDate: z.string().optional().nullable(),
+  previousCheckHours: z.number().nonnegative().optional().nullable(),
 });
 
 type RouteContext = {
@@ -52,6 +56,25 @@ export async function GET(_: Request, context: RouteContext) {
     return fail("NOT_FOUND", "Equipment not found", 404);
   }
 
+  const latestCompleted = (equipment.checkSheets ?? [])
+    .filter((sheet: any) => sheet.status === "COMPLETED")
+    .sort((a: any, b: any) => {
+      const aTime = new Date(a.completedAt ?? a.dueDate).getTime();
+      const bTime = new Date(b.completedAt ?? b.dueDate).getTime();
+      if (aTime !== bTime) return bTime - aTime;
+      return Number(b.completedHours ?? b.dueHours ?? 0) - Number(a.completedHours ?? a.dueHours ?? 0);
+    })[0] ?? null;
+
+  const latestCompletedAt = latestCompleted ? new Date(latestCompleted.completedAt ?? latestCompleted.dueDate) : null;
+  const latestCompletedHours = latestCompleted ? Number(latestCompleted.completedHours ?? latestCompleted.dueHours ?? 0) : null;
+  const visibleSheets = (equipment.checkSheets ?? []).filter((sheet: any) => {
+    if (sheet.status !== "COMPLETED") return true;
+    if (!latestCompletedAt || latestCompletedHours == null || !sheet.completedAt) return true;
+    const sameCompletionDay = new Date(sheet.completedAt).getTime() === latestCompletedAt.getTime();
+    if (!sameCompletionDay) return true;
+    return Number(sheet.dueHours) >= latestCompletedHours;
+  });
+
   return ok({
     id: equipment.id,
     equipmentNumber: equipment.equipmentNumber,
@@ -62,6 +85,9 @@ export async function GET(_: Request, context: RouteContext) {
     commissionedAt: equipment.commissionedAt?.toISOString() ?? null,
     isActive: equipment.isActive,
     usageUnit: equipment.usageUnit,
+    previousCheckCode: latestCompleted?.checkCode ?? null,
+    previousCheckDate: latestCompleted ? new Date(latestCompleted.completedAt ?? latestCompleted.dueDate).toISOString().slice(0, 10) : null,
+    previousCheckHours: latestCompleted ? Number(latestCompleted.completedHours ?? latestCompleted.dueHours) : null,
     checkRules: equipment.checkRules.map((rule: any) => ({
       id: rule.id,
       code: rule.code,
@@ -72,8 +98,9 @@ export async function GET(_: Request, context: RouteContext) {
       intervalTimeValue: rule.intervalTimeValue,
       intervalTimeUnit: rule.intervalTimeUnit,
       isActive: rule.isActive,
+      isOneTime: rule.isOneTime,
     })),
-    checkSheets: equipment.checkSheets.map((sheet: any) => ({
+    checkSheets: visibleSheets.map((sheet: any) => ({
       id: sheet.id,
       checkCode: sheet.checkCode,
       dueHours: Number(sheet.dueHours),
@@ -137,10 +164,95 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (parsed.data.isActive !== undefined) updateData.isActive = parsed.data.isActive;
   if (parsed.data.usageUnit !== undefined) updateData.usageUnit = parsed.data.usageUnit;
 
+  const baselineTouched =
+    parsed.data.previousCheckCode !== undefined ||
+    parsed.data.previousCheckDate !== undefined ||
+    parsed.data.previousCheckHours !== undefined;
+  if (baselineTouched) {
+    const code = parsed.data.previousCheckCode ?? null;
+    const dateRaw = parsed.data.previousCheckDate ?? null;
+    const hours = parsed.data.previousCheckHours ?? null;
+    const clearAll = code === null && dateRaw === null && hours === null;
+    if (!clearAll) {
+      if (!code || !dateRaw || hours == null) {
+        return fail("BAD_REQUEST", "Previous check code, date, and hours must all be provided together", 400);
+      }
+      const date = new Date(`${dateRaw}T00:00:00.000Z`);
+      if (Number.isNaN(date.getTime())) {
+        return fail("BAD_REQUEST", "previousCheckDate must be YYYY-MM-DD", 400);
+      }
+      const match = await prisma.checkRule.findFirst({
+        where: { equipmentId, code },
+        select: { id: true, code: true },
+      });
+      if (!match) {
+        return fail("BAD_REQUEST", "Previous check code must match one of the check rules", 400);
+      }
+      updateData.planningBaselineCheckCode = code;
+      updateData.planningBaselineCheckDate = date;
+      updateData.planningBaselineHours = hours;
+    } else {
+      updateData.planningBaselineCheckCode = null;
+      updateData.planningBaselineCheckDate = null;
+      updateData.planningBaselineHours = null;
+    }
+  }
+
   const updated = await prisma.equipment.update({
     where: { id: equipmentId },
     data: updateData,
   });
+
+  if (baselineTouched && updated.planningBaselineCheckCode && updated.planningBaselineCheckDate && updated.planningBaselineHours != null) {
+    const match = await prisma.checkRule.findFirst({
+      where: { equipmentId, code: updated.planningBaselineCheckCode },
+      select: { id: true, code: true },
+    });
+    if (match) {
+      const existing = await prisma.checkSheet.findFirst({
+        where: {
+          equipmentId,
+          checkCode: match.code,
+          dueHours: Number(updated.planningBaselineHours),
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        await prisma.checkSheet.update({
+          where: { id: existing.id },
+          data: {
+            checkRuleId: match.id,
+            dueDate: updated.planningBaselineCheckDate,
+            triggerType: "HOURS",
+            status: "COMPLETED",
+            completedAt: updated.planningBaselineCheckDate,
+            completedHours: Number(updated.planningBaselineHours),
+            issuedAt: null,
+            remarks: null,
+          },
+        });
+      } else {
+        await prisma.checkSheet.create({
+          data: {
+            equipmentId,
+            checkRuleId: match.id,
+            checkCode: match.code,
+            dueHours: Number(updated.planningBaselineHours),
+            dueDate: updated.planningBaselineCheckDate,
+            triggerType: "HOURS",
+            status: "COMPLETED",
+            completedAt: updated.planningBaselineCheckDate,
+            completedHours: Number(updated.planningBaselineHours),
+          },
+        });
+      }
+      await ensureImpliedCompletedChecks({
+        equipmentId,
+        baselineHours: Number(updated.planningBaselineHours),
+        baselineDate: updated.planningBaselineCheckDate,
+      }).catch(() => null);
+    }
+  }
 
   await writeAuditLog({
     userId: access.user.id,

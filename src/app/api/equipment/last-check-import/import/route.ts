@@ -5,6 +5,7 @@ import { requireAccess } from "@/lib/api/guard";
 import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
+import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
 
 type ImportRow = {
   equipmentNumber: string;
@@ -19,6 +20,22 @@ function normalizeCell(value: unknown) {
     return value.toISOString().slice(0, 10);
   }
   return String(value).trim();
+}
+
+function parseDateFlexible(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return new Date("invalid");
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    return new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  }
+  const usMatch = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed);
+  if (usMatch) {
+    const [, m, d, y] = usMatch;
+    return new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
+  }
+  return new Date("invalid");
 }
 
 function parseCsv(content: string): ImportRow[] {
@@ -120,34 +137,42 @@ export async function POST(request: Request) {
   }
 
   const errors: Array<{ row: number; message: string }> = [];
-  const normalized = rows.map((r, index) => {
-    const equipmentNumber = r.equipmentNumber.trim();
-    const lastCheckCode = r.lastCheckCode.trim().toUpperCase();
-    const lastCheckDate = r.lastCheckDate.trim();
-    const lastCheckHoursRaw = r.lastCheckHours.trim();
-    const date = new Date(`${lastCheckDate}T00:00:00.000Z`);
-    const hours = Number(lastCheckHoursRaw);
+  const normalized = rows
+    .map((r, index) => {
+      const equipmentNumber = r.equipmentNumber.trim();
+      const lastCheckCode = r.lastCheckCode.trim().toUpperCase();
+      const lastCheckDateRaw = r.lastCheckDate.trim();
+      const lastCheckHoursRaw = r.lastCheckHours.trim();
+      const date = parseDateFlexible(lastCheckDateRaw);
+      const hours = Number(lastCheckHoursRaw);
 
-    if (!equipmentNumber) {
-      errors.push({ row: index + 2, message: "equipmentNumber is required" });
-    }
-    if (!/^[A-Z]$/.test(lastCheckCode)) {
-      errors.push({ row: index + 2, message: "lastCheckCode must be a single letter A-Z" });
-    }
-    if (Number.isNaN(date.getTime())) {
-      errors.push({ row: index + 2, message: "lastCheckDate must be YYYY-MM-DD" });
-    }
-    if (!Number.isFinite(hours) || hours < 0) {
-      errors.push({ row: index + 2, message: "lastCheckHours must be a non-negative number" });
-    }
+      let hasError = false;
+      if (!equipmentNumber) {
+        errors.push({ row: index + 2, message: "equipmentNumber is required" });
+        hasError = true;
+      }
+      if (!/^[A-Z]$/.test(lastCheckCode)) {
+        errors.push({ row: index + 2, message: "lastCheckCode must be a single letter A-Z" });
+        hasError = true;
+      }
+      if (Number.isNaN(date.getTime())) {
+        errors.push({ row: index + 2, message: "lastCheckDate must be YYYY-MM-DD or MM/DD/YYYY" });
+        hasError = true;
+      }
+      if (!Number.isFinite(hours) || hours < 0) {
+        errors.push({ row: index + 2, message: "lastCheckHours must be a non-negative number" });
+        hasError = true;
+      }
 
-    return {
-      equipmentNumber,
-      lastCheckCode,
-      lastCheckDate: date,
-      lastCheckHours: hours,
-    };
-  });
+      if (hasError) return null;
+      return {
+        equipmentNumber,
+        lastCheckCode,
+        lastCheckDate: date,
+        lastCheckHours: hours,
+      };
+    })
+    .filter((v): v is NonNullable<typeof v> => v != null);
 
   const uniqueEquipNumbers = [...new Set(normalized.map((r) => r.equipmentNumber).filter(Boolean))];
   const equipments = await prisma.equipment.findMany({
@@ -255,11 +280,22 @@ export async function POST(request: Request) {
             triggerType: TriggerType.HOURS,
             status: CheckStatus.COMPLETED,
             completedAt: item.dueDate,
+            completedHours: item.dueHours,
           },
         });
       }
     }
   });
+
+  await Promise.all(
+    validItems.map((item) =>
+      ensureImpliedCompletedChecks({
+        equipmentId: item.equipmentId,
+        baselineHours: item.dueHours,
+        baselineDate: item.dueDate,
+      }).catch(() => null)
+    )
+  );
 
   return ok({
     totalRows: rows.length,

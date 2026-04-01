@@ -21,6 +21,17 @@ export async function GET() {
           equipmentNumber: true,
           displayName: true,
           usageUnit: true,
+          checkSheets: {
+            where: { status: "COMPLETED" as any },
+            orderBy: [{ completedAt: "desc" }, { dueHours: "desc" }],
+            take: 1,
+            select: {
+              completedAt: true,
+              dueDate: true,
+              completedHours: true,
+              dueHours: true,
+            },
+          },
         },
       },
     },
@@ -31,7 +42,17 @@ export async function GET() {
   });
 
   return ok(
-    checkSheets.map((sheet) => {
+    checkSheets
+      .filter((sheet) => {
+        const cutoff = sheet.equipment.checkSheets[0] ?? null;
+        if (sheet.status !== "COMPLETED" || !cutoff) return true;
+        const cutoffAt = cutoff.completedAt ?? cutoff.dueDate;
+        if (!cutoffAt || !sheet.completedAt) return true;
+        if (sheet.completedAt.getTime() !== cutoffAt.getTime()) return true;
+        const cutoffHours = Number(cutoff.completedHours ?? cutoff.dueHours ?? 0);
+        return Number(sheet.dueHours) >= cutoffHours;
+      })
+      .map((sheet) => {
       let pdfFilePath: string | null = null;
       if (sheet.pdfFilePath) {
         const relative = sheet.pdfFilePath.replace(/^\/+/, "").replace(/^uploads\//, "");
@@ -54,6 +75,6 @@ export async function GET() {
         pdfFilePath,
         completedHours: sheet.completedHours !== null ? Number(sheet.completedHours) : null,
       };
-    }),
+      }),
   );
 }

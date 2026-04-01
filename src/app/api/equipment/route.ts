@@ -5,6 +5,7 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { CheckStatus, UsageUnit } from "@prisma/client";
+import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
 
 const ruleSchema = z.object({
   code: z
@@ -194,6 +195,12 @@ export async function POST(request: Request) {
           completedHours,
         },
       });
+
+      await ensureImpliedCompletedChecks({
+        equipmentId: equipment.id,
+        baselineHours: completedHours,
+        baselineDate: previousCheckDate,
+      }).catch(() => null);
     }
   }
 
