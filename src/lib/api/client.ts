@@ -21,6 +21,12 @@ async function apiRequest<T>(
 
   const payload = (await response.json()) as ApiSuccess<T> | ApiError;
 
+  if (response.status === 401 && typeof window !== "undefined") {
+    window.sessionStorage.setItem("grsd:session-expired", "1");
+    window.location.href = apiPath("/");
+    throw new Error("Session expired");
+  }
+
   if (!response.ok) {
     const message =
       "error" in payload ? payload.error.message : "Request failed";

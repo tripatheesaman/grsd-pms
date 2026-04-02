@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { useLogin } from "@/hooks/use-auth";
 import { BASE_PATH } from "@/lib/config/app-config";
@@ -9,6 +9,15 @@ export function AuthScreen() {
   const login = useLogin();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const isExpired = window.sessionStorage.getItem("grsd:session-expired") === "1";
+    if (isExpired) {
+      window.sessionStorage.removeItem("grsd:session-expired");
+      toast.error("Session expired. Please sign in again.");
+    }
+  }, []);
 
   const loginError = login.error instanceof Error ? login.error.message : "";
 

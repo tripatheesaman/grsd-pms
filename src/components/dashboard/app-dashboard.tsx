@@ -869,6 +869,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const lastSessionCheckRef = useRef(0);
   
   const [equipmentSearch, setEquipmentSearch] = useState("");
   const [equipmentSearchOpen, setEquipmentSearchOpen] = useState(false);
@@ -905,6 +906,34 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       return () => document.removeEventListener("mousedown", handleClickOutside);
     }
   }, [equipmentSearchOpen, profileMenuOpen]);
+
+  useEffect(() => {
+    const verifySessionOnInteraction = async () => {
+      const now = Date.now();
+      if (now - lastSessionCheckRef.current < 15000) return;
+      lastSessionCheckRef.current = now;
+      const response = await fetch(apiPath("/api/auth/me"), {
+        method: "GET",
+        credentials: "include",
+      }).catch(() => null);
+      if (!response || response.status === 401) {
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem("grsd:session-expired", "1");
+          window.location.href = apiPath("/");
+        }
+      }
+    };
+
+    const events: Array<keyof WindowEventMap> = ["click", "keydown", "submit"];
+    for (const eventName of events) {
+      window.addEventListener(eventName, verifySessionOnInteraction, true);
+    }
+    return () => {
+      for (const eventName of events) {
+        window.removeEventListener(eventName, verifySessionOnInteraction, true);
+      }
+    };
+  }, []);
 
   const [equipmentNumber, setEquipmentNumber] = useState("");
   const [equipmentDisplayName, setEquipmentDisplayName] = useState("");
