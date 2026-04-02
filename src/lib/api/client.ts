@@ -22,8 +22,17 @@ async function apiRequest<T>(
   const payload = (await response.json()) as ApiSuccess<T> | ApiError;
 
   if (response.status === 401 && typeof window !== "undefined") {
-    window.sessionStorage.setItem("grsd:session-expired", "1");
-    window.location.href = apiPath("/");
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+    const isAuthEndpoint = normalizedPath.startsWith("/api/auth/");
+    const alreadyOnLogin = window.location.pathname === apiPath("/");
+    const redirectInProgress = window.sessionStorage.getItem("grsd:redirecting-login") === "1";
+
+    // Never redirect for auth endpoints themselves to avoid login loops.
+    if (!isAuthEndpoint && !alreadyOnLogin && !redirectInProgress) {
+      window.sessionStorage.setItem("grsd:redirecting-login", "1");
+      window.sessionStorage.setItem("grsd:session-expired", "1");
+      window.location.href = apiPath("/");
+    }
     throw new Error("Session expired");
   }
 

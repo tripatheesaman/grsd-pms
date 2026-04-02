@@ -12,6 +12,7 @@ export function AuthScreen() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    window.sessionStorage.removeItem("grsd:redirecting-login");
     const isExpired = window.sessionStorage.getItem("grsd:session-expired") === "1";
     if (isExpired) {
       window.sessionStorage.removeItem("grsd:session-expired");

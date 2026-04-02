@@ -4031,6 +4031,21 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                   <button
                                     type="button"
                                     onClick={() => {
+                                      if (typeof window !== "undefined") {
+                                        window.open(
+                                          apiPath(`/api/checksheets/${sheet.id}/file`),
+                                          "_blank",
+                                          "noopener,noreferrer",
+                                        );
+                                      }
+                                    }}
+                                    className="rounded-lg border-2 border-[var(--color-primary)] bg-white px-3 py-1.5 text-xs font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)] hover:text-white"
+                                  >
+                                    Print Checksheet
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
                                       setCompleteModalCheck(sheet);
                                       setCompleteDate(new Date().toISOString().slice(0, 10));
                                     }}

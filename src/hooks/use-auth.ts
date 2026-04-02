@@ -28,6 +28,9 @@ export function useCurrentUser() {
     queryKey: ["auth", "me"],
     queryFn: () => apiGet<AuthUser>("/api/auth/me"),
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: 60_000,
   });
 }
 
