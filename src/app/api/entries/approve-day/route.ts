@@ -3,8 +3,8 @@ import { EntryStatus } from "@prisma/client";
 import { parseBody, requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
-import { deriveDailyRatesFromCumulativeReadings, deriveForecastAverageHoursPerDay } from "@/lib/planning/engine";
-import { recalculateEquipmentUsage } from "@/lib/planning/recalculate-usage";
+import { recalculateEquipmentUsageBatch } from "@/lib/planning/recalculate-usage";
+import { getSystemThresholds } from "@/lib/planning/thresholds";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
@@ -14,6 +14,24 @@ const MAX_HOURS_RUN = 1_000_000;
 const approveDaySchema = z.object({
   entryDate: z.string().date(),
 });
+
+/** Plan sync is CPU/DB heavy; keep in-flight work moderate to avoid DB pool thrash. */
+const PLAN_SYNC_CONCURRENCY = 12;
+
+async function runInConcurrencyLimit<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+) {
+  let index = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (index < items.length) {
+      const current = items[index++];
+      await fn(current);
+    }
+  });
+  await Promise.all(workers);
+}
 
 export async function POST(request: Request) {
   const access = await requireAccess({
@@ -42,14 +60,11 @@ export async function POST(request: Request) {
         lt: nextDay,
       },
     },
-    include: {
-      equipment: {
-        select: {
-          id: true,
-          currentHours: true,
-          averageHoursPerDay: true,
-        },
-      },
+    select: {
+      id: true,
+      equipmentId: true,
+      entryDate: true,
+      hoursRun: true,
     },
     orderBy: {
       entryDate: "asc",
@@ -63,80 +78,48 @@ export async function POST(request: Request) {
   const equipmentIds = [...new Set(pendingEntries.map((e) => e.equipmentId))];
   const maxEntryDate = new Date(Math.max(...pendingEntries.map((e) => e.entryDate.getTime())));
 
-  const [allPreviousEntries, approvedCounts, allRecentEntries] = await Promise.all([
-    prisma.dailyEntry.findMany({
-      where: {
-        equipmentId: { in: equipmentIds },
-        status: EntryStatus.APPROVED,
-        entryDate: { lt: maxEntryDate },
-      },
-      select: {
-        equipmentId: true,
-        entryDate: true,
-        hoursRun: true,
-      },
-      orderBy: [
-        { equipmentId: "asc" },
-        { entryDate: "desc" },
-      ],
-    }),
-    prisma.dailyEntry.groupBy({
-      by: ["equipmentId"],
-      where: {
-        equipmentId: { in: equipmentIds },
-        status: EntryStatus.APPROVED,
-      },
-      _count: true,
-    }),
-    prisma.dailyEntry.findMany({
-      where: {
-        equipmentId: { in: equipmentIds },
-        status: EntryStatus.APPROVED,
-      },
-      select: {
-        equipmentId: true,
-        entryDate: true,
-        hoursRun: true,
-      },
-      orderBy: [
-        { equipmentId: "asc" },
-        { entryDate: "desc" },
-      ],
-    }),
-  ]);
+  /**
+   * @@unique([equipmentId, entryDate, status]) allows BOTH (E, T, APPROVED) and (E, T, PENDING).
+   * Bulk/single entry create only blocks duplicate PENDING, so users can end up with a new PENDING
+   * when an APPROVED row already exists for the same stored `entryDate`. Promoting PENDING → APPROVED
+   * would then create a second APPROVED with the same (E, T) and violate the unique key.
+   * We delete conflicting APPROVED rows first so the pending submission becomes the approved record.
+   */
+  const allApprovedBeforeLatestPending = await prisma.dailyEntry.findMany({
+    where: {
+      equipmentId: { in: equipmentIds },
+      status: EntryStatus.APPROVED,
+      entryDate: { lt: maxEntryDate },
+    },
+    select: {
+      equipmentId: true,
+      entryDate: true,
+      hoursRun: true,
+    },
+    orderBy: [{ equipmentId: "asc" }, { entryDate: "asc" }],
+  });
 
-  const previousMap = new Map<string, { entryDate: Date; hoursRun: number }>();
-  for (const entry of allPreviousEntries) {
-    const key = entry.equipmentId;
-    if (!previousMap.has(key) || entry.entryDate > previousMap.get(key)!.entryDate) {
-      previousMap.set(key, { entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) });
-    }
+  /** Approved rows for this equipment, sorted by entryDate ascending (for "previous" lookup). */
+  const approvedByEquipment = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
+  for (const row of allApprovedBeforeLatestPending) {
+    const list = approvedByEquipment.get(row.equipmentId) ?? [];
+    list.push({ entryDate: row.entryDate, hoursRun: Number(row.hoursRun) });
+    approvedByEquipment.set(row.equipmentId, list);
   }
 
-  const approvedCountMap = new Map(
-    approvedCounts.map((c) => [c.equipmentId, c._count > 0])
-  );
-
-  const recentEntriesMap = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
-  const recentCounts = new Map<string, number>();
-  for (const entry of allRecentEntries) {
-    const current = recentCounts.get(entry.equipmentId) ?? 0;
-    if (current >= 45) {
-      continue;
+  /** Latest APPROVED strictly before this pending row's `entryDate` (same rule as single-entry approve). */
+  function previousApprovedHoursFor(equipmentId: string, before: Date): number {
+    const list = approvedByEquipment.get(equipmentId) ?? [];
+    let prevHours = 0;
+    for (const a of list) {
+      if (a.entryDate.getTime() >= before.getTime()) break;
+      prevHours = a.hoursRun;
     }
-    recentCounts.set(entry.equipmentId, current + 1);
-    if (!recentEntriesMap.has(entry.equipmentId)) {
-      recentEntriesMap.set(entry.equipmentId, []);
-    }
-    recentEntriesMap.get(entry.equipmentId)!.push({
-      entryDate: entry.entryDate,
-      hoursRun: Number(entry.hoursRun),
-    });
+    return prevHours;
   }
 
   const validEntries = pendingEntries.filter((entry) => {
-    const previousEntry = previousMap.get(entry.equipmentId);
-    const previousHours = previousEntry ? Number(previousEntry.hoursRun) : 0;
+    const previousHours = previousApprovedHoursFor(entry.equipmentId, entry.entryDate);
 
     const hoursRun = Number(entry.hoursRun);
     if (!Number.isFinite(hoursRun) || hoursRun <= 0 || hoursRun > MAX_HOURS_RUN) {
@@ -147,70 +130,22 @@ export async function POST(request: Request) {
 
   const invalidCount = pendingEntries.length - validEntries.length;
 
-  const equipmentUpdates = new Map<string, { averageHoursPerDay: number; currentHours: number }>();
-  const entryUpdates: Array<{ id: string; equipmentId: string }> = [];
-  const equipmentIdsToSync = new Set<string>();
-
-  for (const entry of validEntries) {
-    const previousEntry = previousMap.get(entry.equipmentId);
-    const previousHours = previousEntry ? Number(previousEntry.hoursRun) : 0;
-
-    const recentEntries = recentEntriesMap.get(entry.equipmentId) ?? [];
-    const sortedWithNew = [
-      ...recentEntries.map((e) => ({ entryDate: e.entryDate, hoursRun: e.hoursRun })),
-      { entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) },
-    ]
-      .sort((a, b) => b.entryDate.getTime() - a.entryDate.getTime())
-      .slice(0, 90)
-      .sort((a, b) => a.entryDate.getTime() - b.entryDate.getTime());
-    const dailyDeltas = deriveDailyRatesFromCumulativeReadings(sortedWithNew);
-
-    let dailyIncrementForNew: number | undefined;
-    if (previousEntry) {
-      const rawDelta = Math.max(0, Number(entry.hoursRun) - previousHours);
-      const dayMs = 24 * 60 * 60 * 1000;
-      const rawDays = (entry.entryDate.getTime() - previousEntry.entryDate.getTime()) / dayMs;
-      const days = Math.max(1, Math.round(rawDays));
-      const rate = rawDelta / days;
-      if (Number.isFinite(rate) && rate > 0) dailyIncrementForNew = rate;
-    }
-    const newAverage = deriveForecastAverageHoursPerDay({
-      latestAverage: Number(entry.equipment.averageHoursPerDay),
-      historicalDailyHours: dailyDeltas,
-      upcomingEnteredHours: dailyIncrementForNew,
-    });
-
-    const maxApprovedHours = recentEntries.length > 0
-      ? Math.max(...recentEntries.map((e) => e.hoursRun))
-      : Number(entry.equipment.currentHours);
-    const newCurrentHours = Math.max(Number(entry.hoursRun), maxApprovedHours);
-
-    if (!equipmentUpdates.has(entry.equipmentId)) {
-      equipmentUpdates.set(entry.equipmentId, {
-        averageHoursPerDay: newAverage,
-        currentHours: newCurrentHours,
-      });
-    } else {
-      const existing = equipmentUpdates.get(entry.equipmentId)!;
-      equipmentUpdates.set(entry.equipmentId, {
-        averageHoursPerDay: newAverage,
-        currentHours: Math.max(existing.currentHours, newCurrentHours),
-      });
-    }
-
-    entryUpdates.push({
-      id: entry.id,
-      equipmentId: entry.equipmentId,
-    });
-
-    equipmentIdsToSync.add(entry.equipmentId);
-  }
-
+  const idsToApprove = validEntries.map((e) => e.id);
   const approvedAt = new Date();
-  const idsToApprove = entryUpdates.map((e) => e.id);
+  const currentYear = new Date().getFullYear();
 
   if (idsToApprove.length > 0) {
     await prisma.$transaction(async (tx) => {
+      await tx.dailyEntry.deleteMany({
+        where: {
+          status: EntryStatus.APPROVED,
+          OR: validEntries.map((e) => ({
+            equipmentId: e.equipmentId,
+            entryDate: e.entryDate,
+          })),
+        },
+      });
+
       await tx.dailyEntry.updateMany({
         where: { id: { in: idsToApprove } },
         data: {
@@ -219,24 +154,19 @@ export async function POST(request: Request) {
           approvedAt,
         },
       });
-
-      await Promise.all(
-        Array.from(equipmentUpdates.entries()).map(([equipmentId, data]) =>
-          tx.equipment.update({
-            where: { id: equipmentId },
-            data: {
-              averageHoursPerDay: data.averageHoursPerDay,
-              currentHours: data.currentHours,
-            },
-          })
-        )
-      );
     });
   }
 
-  for (const equipmentId of equipmentIdsToSync) {
-    await recalculateEquipmentUsage(equipmentId);
-    await syncEquipmentPlan(equipmentId, new Date().getFullYear());
+  const uniqueEquipmentIds = [...new Set(validEntries.map((e) => e.equipmentId))];
+
+  if (uniqueEquipmentIds.length > 0) {
+    // Warm threshold cache once so parallel syncs do not each hit systemConfig.
+    await getSystemThresholds();
+    // One batched pass for averages/current hours (few queries), then parallel plan sync only.
+    await recalculateEquipmentUsageBatch(uniqueEquipmentIds);
+    await runInConcurrencyLimit(uniqueEquipmentIds, PLAN_SYNC_CONCURRENCY, async (equipmentId) => {
+      await syncEquipmentPlan(equipmentId, currentYear);
+    });
   }
 
   writeAuditLog({

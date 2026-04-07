@@ -14,8 +14,10 @@ export function QueryProvider({ children }: QueryProviderProps) {
         defaultOptions: {
           queries: {
             refetchOnWindowFocus: false,
+            refetchOnReconnect: false,
             retry: 1,
-            staleTime: 30000,
+            staleTime: 120000,
+            gcTime: 15 * 60 * 1000,
           },
         },
       }),

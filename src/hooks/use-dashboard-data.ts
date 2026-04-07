@@ -1,8 +1,7 @@
 "use client";
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPatch, apiPost, apiDelete } from "@/lib/api/client";
-import { apiPath } from "@/lib/config/app-config";
+import { apiDelete, apiGet, apiPatch, apiPost, apiPostForm } from "@/lib/api/client";
 import {
   DashboardAnalytics,
   EquipmentListItem,
@@ -104,24 +103,27 @@ type UpdateUserInput = {
   isActive?: boolean;
 };
 
-export function useAnalytics() {
+export function useAnalytics(enabled = true) {
   return useQuery({
     queryKey: ["dashboard", "analytics"],
     queryFn: () => apiGet<DashboardAnalytics>("/api/dashboard/analytics"),
+    enabled,
   });
 }
 
-export function useEquipments() {
+export function useEquipments(enabled = true) {
   return useQuery({
     queryKey: ["equipment", "list"],
     queryFn: () => apiGet<EquipmentListItem[]>("/api/equipment"),
+    enabled,
   });
 }
 
-export function useAlerts() {
+export function useAlerts(enabled = true) {
   return useQuery({
     queryKey: ["alerts"],
     queryFn: () => apiGet<AlertItem[]>("/api/alerts"),
+    enabled,
   });
 }
 
@@ -140,10 +142,11 @@ export function useAcknowledgeAlert() {
   });
 }
 
-export function useNotifications() {
+export function useNotifications(enabled = true) {
   return useQuery({
     queryKey: ["notifications"],
     queryFn: () => apiGet<NotificationItem[]>("/api/notifications"),
+    enabled,
   });
 }
 
@@ -222,10 +225,11 @@ export type CheckSheetManagementItem = {
   completedHours: number | null;
 };
 
-export function useAllCheckSheets() {
+export function useAllCheckSheets(enabled = true) {
   return useQuery({
     queryKey: ["checksheets", "all"],
     queryFn: () => apiGet<CheckSheetManagementItem[]>("/api/checksheets/all"),
+    enabled,
   });
 }
 
@@ -235,16 +239,7 @@ export function useUploadCheckSheetPdf() {
     mutationFn: async (payload: { checkSheetId: string; file: File }) => {
       const formData = new FormData();
       formData.append("file", payload.file);
-      const response = await fetch(apiPath(`/api/checksheets/${payload.checkSheetId}/file`), {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error?.message || "Failed to upload PDF");
-      }
-      return result.data;
+      return apiPostForm<{ filePath: string }>(`/api/checksheets/${payload.checkSheetId}/file`, formData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["checksheets", "all"] });
@@ -271,16 +266,10 @@ export function useUploadCompletedCheckPdf() {
     mutationFn: async (payload: { checkSheetId: string; file: File }) => {
       const formData = new FormData();
       formData.append("file", payload.file);
-      const response = await fetch(apiPath(`/api/checksheets/${payload.checkSheetId}/completed-file`), {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error?.message || "Failed to upload reference PDF");
-      }
-      return result.data;
+      return apiPostForm<{ filePath: string }>(
+        `/api/checksheets/${payload.checkSheetId}/completed-file`,
+        formData,
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["checksheets"] });
@@ -317,10 +306,11 @@ export function useForecastMetrics(equipmentId: string | null) {
   });
 }
 
-export function useForecastDrift() {
+export function useForecastDrift(enabled = true) {
   return useQuery({
     queryKey: ["forecast", "drift"],
     queryFn: () => apiGet<ForecastDriftItem[]>("/api/forecast/drift"),
+    enabled,
   });
 }
 
@@ -343,10 +333,11 @@ type SystemConfig = {
   emailReminderDaysBefore: number;
 };
 
-export function useSystemConfig() {
+export function useSystemConfig(enabled = true) {
   return useQuery({
     queryKey: ["config"],
     queryFn: () => apiGet<SystemConfig>("/api/config"),
+    enabled,
   });
 }
 
@@ -408,6 +399,20 @@ export function useCreateEquipment() {
   });
 }
 
+async function invalidateAfterEntriesChange(queryClient: ReturnType<typeof useQueryClient>, includeAlerts = false) {
+  const invalidations = [
+    queryClient.invalidateQueries({ queryKey: ["entries"] }),
+    queryClient.invalidateQueries({ queryKey: ["equipment"] }),
+    queryClient.invalidateQueries({ queryKey: ["equipment", "list"] }),
+    queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] }),
+    queryClient.invalidateQueries({ queryKey: ["checksheets"] }),
+  ];
+  if (includeAlerts) {
+    invalidations.push(queryClient.invalidateQueries({ queryKey: ["alerts"] }));
+  }
+  await Promise.all(invalidations);
+}
+
 export type PendingEntryItem = {
   id: string;
   equipmentId: string;
@@ -425,10 +430,11 @@ export type PendingEntryItem = {
   currentEquipmentHours: number;
 };
 
-export function usePendingEntries() {
+export function usePendingEntries(enabled = true) {
   return useQuery({
     queryKey: ["entries", "pending"],
     queryFn: () => apiGet<PendingEntryItem[]>("/api/entries/pending"),
+    enabled,
   });
 }
 
@@ -449,7 +455,7 @@ export function useAllEntries(filters?: {
   equipmentTo?: string;
   dateFrom?: string;
   dateTo?: string;
-}) {
+}, enabled = true) {
   const queryParams = new URLSearchParams();
   if (filters?.status) queryParams.set("status", filters.status);
   if (filters?.equipmentId) queryParams.set("equipmentId", filters.equipmentId);
@@ -462,6 +468,7 @@ export function useAllEntries(filters?: {
   return useQuery({
     queryKey: ["entries", "all", filters],
     queryFn: () => apiGet<AllEntryItem[]>(`/api/entries/all${queryString ? `?${queryString}` : ""}`),
+    enabled,
   });
 }
 
@@ -473,12 +480,7 @@ export function useApproveEntry() {
         `/api/entries/${entryId}/approve`,
         {}
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipment"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient),
   });
 }
 
@@ -490,12 +492,7 @@ export function useApproveEntriesByDate() {
         "/api/entries/approve-day",
         { entryDate },
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipment"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient),
   });
 }
 
@@ -507,12 +504,7 @@ export function useRejectEntriesByDate() {
         "/api/entries/reject-day",
         { entryDate },
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipment"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient),
   });
 }
 
@@ -524,11 +516,7 @@ export function useRejectEntry() {
         `/api/entries/${payload.entryId}/reject`,
         { reason: payload.reason }
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["equipment"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient),
   });
 }
 
@@ -540,33 +528,15 @@ export function useUpdateEntry() {
         `/api/entries/${payload.entryId}`,
         { entryDate: payload.entryDate, hoursRun: payload.hoursRun }
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient),
   });
 }
 
 export function useDeleteEntry() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (entryId: string) => {
-      const response = await fetch(apiPath(`/api/entries/${entryId}`), {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error?.message || "Failed to delete entry");
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["entries"] });
-      queryClient.invalidateQueries({ queryKey: ["entries", "pending"] });
-      queryClient.invalidateQueries({ queryKey: ["equipment"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
-    },
+    mutationFn: (entryId: string) => apiDelete<{ success: boolean }>(`/api/entries/${entryId}`),
+    onSettled: () => invalidateAfterEntriesChange(queryClient),
   });
 }
 
@@ -581,12 +551,7 @@ export function useCreateEntry() {
           hoursRun: payload.hoursRun,
         },
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["equipment", "list"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
-      queryClient.invalidateQueries({ queryKey: ["alerts"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient, true),
   });
 }
 
@@ -598,12 +563,7 @@ export function useCreateEntriesBulk() {
         "/api/entries/bulk",
         payload,
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["equipment", "list"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
-      queryClient.invalidateQueries({ queryKey: ["alerts"] });
-      queryClient.invalidateQueries({ queryKey: ["checksheets"] });
-    },
+    onSettled: () => invalidateAfterEntriesChange(queryClient, true),
   });
 }
 
@@ -846,6 +806,7 @@ export type EquipmentHistory = {
 export function useEquipmentHistory(
   equipmentId: string | null,
   filters?: { from?: string; to?: string },
+  enabled = true,
 ) {
   const params = new URLSearchParams();
   if (filters?.from) params.set("from", filters.from);
@@ -857,7 +818,7 @@ export function useEquipmentHistory(
       apiGet<EquipmentHistory>(
         `/api/equipment/${equipmentId}/history${qs ? `?${qs}` : ""}`,
       ),
-    enabled: Boolean(equipmentId),
+    enabled: enabled && Boolean(equipmentId),
   });
 }
 
@@ -1007,21 +968,10 @@ export function useUploadCheckRuleTemplatePdf() {
     mutationFn: async (payload: { equipmentId: string; ruleId: string; file: File }) => {
       const formData = new FormData();
       formData.append("file", payload.file);
-      const response = await fetch(
-        apiPath(
-          `/api/equipment/${payload.equipmentId}/check-rules/${payload.ruleId}/template-file`,
-        ),
-        {
-          method: "POST",
-          body: formData,
-          credentials: "include",
-        },
+      return apiPostForm<{ filePath: string }>(
+        `/api/equipment/${payload.equipmentId}/check-rules/${payload.ruleId}/template-file`,
+        formData,
       );
-      const result = await response.json();
-      if (!response.ok) {
-        throw new Error(result.error?.message || "Failed to upload template PDF");
-      }
-      return result.data as { filePath: string };
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["equipment", "checkRules", variables.equipmentId] });
@@ -1108,10 +1058,11 @@ export type Technician = {
   isActive: boolean;
 };
 
-export function useTechnicians() {
+export function useTechnicians(enabled = true) {
   return useQuery({
     queryKey: ["technicians"],
     queryFn: () => apiGet<Technician[]>("/api/technicians"),
+    enabled,
   });
 }
 
