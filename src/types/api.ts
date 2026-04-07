@@ -55,7 +55,7 @@ export type WeeklyPlanItem = {
   triggerType: "HOURS" | "CALENDAR";
   dueDate: string;
   dueHours: number;
-  status: "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE";
+  status: "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE" | "SKIPPED";
 };
 
 export type ForecastMetrics = {

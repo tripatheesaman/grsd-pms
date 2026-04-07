@@ -118,7 +118,7 @@ type WeeklyPlanItem = {
   triggerType: "HOURS" | "CALENDAR";
   dueDate: string;
   dueHours: number;
-  status: "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE";
+  status: "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE" | "SKIPPED";
 };
 
 type CalendarProps = {
@@ -185,6 +185,8 @@ function getStatusColor(status: string) {
       return "bg-yellow-400 text-yellow-900";
     case "COMPLETED":
       return "bg-green-500 text-white";
+    case "SKIPPED":
+      return "bg-slate-500 text-white";
     case "PREDICTED":
       return "bg-blue-500 text-white";
     default:
@@ -900,7 +902,9 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   );
   const [checkSheetMgmtTab, setCheckSheetMgmtTab] = useState<"equipment" | "checksheets">("equipment");
   const [checkSheetMgmtSearch, setCheckSheetMgmtSearch] = useState("");
-  const [checkSheetMgmtStatusFilter, setCheckSheetMgmtStatusFilter] = useState<"ALL" | "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE">("ALL");
+  const [checkSheetMgmtStatusFilter, setCheckSheetMgmtStatusFilter] = useState<
+    "ALL" | "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE" | "SKIPPED"
+  >("ALL");
   const [checkSheetMgmtEquipmentFilter, setCheckSheetMgmtEquipmentFilter] = useState("ALL");
   const [checkSheetMgmtCodeFilter, setCheckSheetMgmtCodeFilter] = useState("ALL");
   const [checkSheetMgmtDateFrom, setCheckSheetMgmtDateFrom] = useState("");
@@ -1055,7 +1059,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const filteredAllChecks = useMemo(() => {
     if (activeSection !== "equipment-management") return [];
     const rawAll: CheckSheetManagementItem[] = (checksheets.data ?? [])
-      .filter((s) => s.status === "ISSUED" || s.status === "COMPLETED")
+      .filter((s) => s.status === "ISSUED" || s.status === "COMPLETED" || s.status === "SKIPPED")
       .map((s) => {
         const mgmtData = allCheckSheets.data?.find((m) => m.id === s.id);
         return {
@@ -1071,6 +1075,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           status: s.status,
           issuedAt: mgmtData?.issuedAt ?? (s.status === "ISSUED" ? new Date().toISOString() : null),
           completedAt: mgmtData?.completedAt ?? (s.status === "COMPLETED" ? new Date().toISOString() : null),
+          skippedAt: mgmtData?.skippedAt ?? (s.status === "SKIPPED" ? new Date().toISOString() : null),
           pdfFilePath: mgmtData?.pdfFilePath ?? null,
           completedHours: mgmtData?.completedHours ?? null,
         };
@@ -1091,9 +1096,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     
     if (checkSheetMgmtStatusFilter !== "ALL") {
       result = result.filter((s) => {
+        if (s.status === "SKIPPED") {
+          return checkSheetMgmtStatusFilter === "SKIPPED";
+        }
         const hasCompletedAt = s.completedAt !== null && s.completedAt !== undefined && s.completedAt !== "";
         const hasIssuedAt = s.issuedAt !== null && s.issuedAt !== undefined && s.issuedAt !== "";
-        
+
         let effectiveStatus: string;
         if (hasCompletedAt) {
           effectiveStatus = "COMPLETED";
@@ -1102,7 +1110,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         } else {
           effectiveStatus = s.status;
         }
-        
+
         return effectiveStatus === checkSheetMgmtStatusFilter;
       });
     }
@@ -1256,6 +1264,24 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
   const plan = useEquipmentPlan(selectedEquipmentId, year);
   const forecastMetrics = useForecastMetrics(selectedEquipmentId);
+  const equipmentDetailForPlanning = useEquipmentDetail(
+    activeSection === "planning" && selectedEquipmentId ? selectedEquipmentId : null,
+  );
+  const [planningOverrideHours, setPlanningOverrideHours] = useState("");
+  const [planningOverrideNote, setPlanningOverrideNote] = useState("");
+  useEffect(() => {
+    const d = equipmentDetailForPlanning.data;
+    if (!d) return;
+    setPlanningOverrideHours(
+      d.planningEffectiveHoursOverride != null ? String(d.planningEffectiveHoursOverride) : "",
+    );
+    setPlanningOverrideNote(d.planningEffectiveHoursNote ?? "");
+  }, [
+    selectedEquipmentId,
+    equipmentDetailForPlanning.data?.id,
+    equipmentDetailForPlanning.data?.planningEffectiveHoursOverride,
+    equipmentDetailForPlanning.data?.planningEffectiveHoursNote,
+  ]);
   const overviewChecks = useCheckSheetsPaginated(
     {
       page: overviewChecksPage,
@@ -1496,6 +1522,13 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           text: "text-green-900",
           badge: "bg-green-500 text-white"
         };
+      case "SKIPPED":
+        return {
+          bg: "from-slate-100 to-slate-50",
+          border: "border-slate-400",
+          text: "text-slate-900",
+          badge: "bg-slate-500 text-white"
+        };
       default:
         return {
           bg: "from-gray-100 to-gray-50",
@@ -1520,6 +1553,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         return "Issued";
       case "COMPLETED":
         return "Completed";
+      case "SKIPPED":
+        return "Skipped";
       default:
         return status;
     }
@@ -3044,6 +3079,121 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                 )}
               </Card>
 
+              {selectedEquipmentId && equipmentDetailForPlanning.data && (
+                <Card title="Planning feedback (meter vs. model)">
+                  <p className="mb-3 text-xs font-medium text-[var(--color-text-soft)]">
+                    Predictions use your{" "}
+                    <span className="font-bold text-[var(--color-text)]">latest approved daily entry</span> for date
+                    and cumulative {equipmentDetailForPlanning.data.usageUnit === "KM" ? "kilometers" : "hours"}. If
+                    the odometer reading does not match what the schedule should assume, set an effective value here
+                    (optional). Clear the field to use live readings again. New daily entries continue to refine the
+                    forecasted rate.
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">
+                        Effective cumulative {equipmentDetailForPlanning.data.usageUnit === "KM" ? "km" : "hours"} for planning
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={planningOverrideHours}
+                        onChange={(e) => setPlanningOverrideHours(e.target.value)}
+                        placeholder={`Recorded: ${equipmentDetailForPlanning.data.currentHours.toFixed(2)}`}
+                        className={dashboardInputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Note</label>
+                      <input
+                        type="text"
+                        value={planningOverrideNote}
+                        onChange={(e) => setPlanningOverrideNote(e.target.value)}
+                        placeholder="Why this adjustment (optional)"
+                        className={dashboardInputClass}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {canAdmin && (
+                      <>
+                        <button
+                          type="button"
+                          disabled={updateEquipment.isPending}
+                          onClick={() => {
+                            const raw = planningOverrideHours.trim();
+                            const hoursValue = raw === "" ? null : Number(raw);
+                            if (hoursValue != null && (!Number.isFinite(hoursValue) || hoursValue < 0)) {
+                              toast.error("Enter a valid non-negative number for effective hours/km, or leave blank.");
+                              return;
+                            }
+                            updateEquipment.mutate(
+                              {
+                                equipmentId: selectedEquipmentId,
+                                planningEffectiveHoursOverride: hoursValue,
+                                planningEffectiveHoursNote:
+                                  planningOverrideNote.trim() === ""
+                                    ? null
+                                    : planningOverrideNote.trim(),
+                              },
+                              {
+                                onSuccess: () => {
+                                  toast.success("Planning baseline saved");
+                                  void plan.refetch();
+                                },
+                                onError: (err) =>
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Could not save planning feedback",
+                                  ),
+                              },
+                            );
+                          }}
+                          className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-xs font-bold text-white shadow transition-all hover:scale-[1.02]"
+                        >
+                          Save planning feedback
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            updateEquipment.isPending ||
+                            (equipmentDetailForPlanning.data.planningEffectiveHoursOverride == null &&
+                              !equipmentDetailForPlanning.data.planningEffectiveHoursNote)
+                          }
+                          onClick={() => {
+                            setPlanningOverrideHours("");
+                            setPlanningOverrideNote("");
+                            updateEquipment.mutate(
+                              {
+                                equipmentId: selectedEquipmentId,
+                                planningEffectiveHoursOverride: null,
+                                planningEffectiveHoursNote: null,
+                              },
+                              {
+                                onSuccess: () => {
+                                  toast.success("Planning feedback cleared");
+                                  void plan.refetch();
+                                },
+                                onError: (err) =>
+                                  toast.error(
+                                    err instanceof Error ? err.message : "Could not clear planning feedback",
+                                  ),
+                              },
+                            );
+                          }}
+                          className="rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-xs font-bold text-[var(--color-text)]"
+                        >
+                          Clear override
+                        </button>
+                      </>
+                    )}
+                    {!canAdmin && (
+                      <p className="text-xs text-[var(--color-text-soft)]">Admin access required to edit planning feedback.</p>
+                    )}
+                  </div>
+                </Card>
+              )}
+
               <Card title="Export Plan">
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-5">
@@ -3454,16 +3604,41 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                     </td>
                                     <td className="px-3 py-2">{sheet.triggerType === "HOURS" ? "Hours" : "Calendar"}</td>
                                     <td className="px-3 py-2 text-right">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setIssueModalCheck(sheet);
-                                          setIssueDate(new Date().toISOString().slice(0, 10));
-                                        }}
-                                        className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-2.5 py-1.5 text-xs font-bold text-white shadow transition-all hover:-translate-y-0.5 hover:shadow-lg"
-                                      >
-                                        Issue
-                                      </button>
+                                      <div className="flex justify-end gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setIssueModalCheck(sheet);
+                                            setIssueDate(new Date().toISOString().slice(0, 10));
+                                          }}
+                                          className="rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-2.5 py-1.5 text-xs font-bold text-white shadow transition-all hover:-translate-y-0.5 hover:shadow-lg"
+                                        >
+                                          Issue
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const dateIso = new Date().toISOString();
+                                            updateCheckSheet.mutate(
+                                              { id: sheet.id, action: "skip", date: dateIso },
+                                              {
+                                                onSuccess: () => {
+                                                  toast.success(
+                                                    `Check ${sheet.checkCode} skipped for ${sheet.equipmentNumber} (schedule moves on)`,
+                                                  );
+                                                },
+                                                onError: (err) =>
+                                                  toast.error(
+                                                    err instanceof Error ? err.message : "Failed to skip check",
+                                                  ),
+                                              },
+                                            );
+                                          }}
+                                          className="rounded-lg border-2 border-slate-400 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-700 transition-all hover:bg-slate-100"
+                                        >
+                                          Skip
+                                        </button>
+                                      </div>
                                     </td>
                                   </tr>
                                 );
@@ -3653,7 +3828,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                     </p>
                                   </div>
                                 </div>
-                                <div className="flex gap-2 ml-4">
+                                <div className="flex flex-wrap gap-2 ml-4">
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -3678,6 +3853,27 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                     className="rounded-lg bg-gradient-to-r from-[var(--color-accent)] to-[var(--color-accent-dark)] px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
                                   >
                                     Submit Completion
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const dateIso = new Date().toISOString();
+                                      updateCheckSheet.mutate(
+                                        { id: sheet.id, action: "skip", date: dateIso },
+                                        {
+                                          onSuccess: () => {
+                                            toast.success("Check skipped; schedule will re-align from intervals.");
+                                          },
+                                          onError: (err) =>
+                                            toast.error(
+                                              err instanceof Error ? err.message : "Failed to skip check",
+                                            ),
+                                        },
+                                      );
+                                    }}
+                                    className="rounded-lg border-2 border-slate-400 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 transition-all hover:bg-slate-100"
+                                  >
+                                    Skip check
                                   </button>
                                 </div>
                               </div>
@@ -3987,6 +4183,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           <option value="ALL">All (Ongoing + Completed)</option>
                           <option value="ISSUED">Ongoing</option>
                           <option value="COMPLETED">Completed</option>
+                          <option value="SKIPPED">Skipped</option>
                         </select>
                       </div>
                       <div>
@@ -3997,7 +4194,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
                         >
                           <option value="ALL">All Equipment</option>
-                          {Array.from(new Set((checksheets.data ?? []).filter(s => s.status === "ISSUED" || s.status === "COMPLETED").map((s) => s.equipmentNumber).sort())).map(
+                          {Array.from(new Set((checksheets.data ?? []).filter(s => s.status === "ISSUED" || s.status === "COMPLETED" || s.status === "SKIPPED").map((s) => s.equipmentNumber).sort())).map(
                             (num) => (
                               <option key={num} value={num}>
                                 {num}
@@ -4949,6 +5146,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               <option value="ALL">All (Ongoing + Completed)</option>
                               <option value="ISSUED">Ongoing</option>
                               <option value="COMPLETED">Completed</option>
+                              <option value="SKIPPED">Skipped</option>
                             </select>
                           </div>
                           <div>

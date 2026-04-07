@@ -22,11 +22,12 @@ export async function GET() {
           displayName: true,
           usageUnit: true,
           checkSheets: {
-            where: { status: "COMPLETED" as any },
-            orderBy: [{ completedAt: "desc" }, { dueHours: "desc" }],
+            where: { status: { in: ["COMPLETED" as const, "SKIPPED" as const] } },
+            orderBy: [{ completedAt: "desc" }, { skippedAt: "desc" }, { dueHours: "desc" }],
             take: 1,
             select: {
               completedAt: true,
+              skippedAt: true,
               dueDate: true,
               completedHours: true,
               dueHours: true,
@@ -45,10 +46,11 @@ export async function GET() {
     checkSheets
       .filter((sheet) => {
         const cutoff = sheet.equipment.checkSheets[0] ?? null;
-        if (sheet.status !== "COMPLETED" || !cutoff) return true;
-        const cutoffAt = cutoff.completedAt ?? cutoff.dueDate;
-        if (!cutoffAt || !sheet.completedAt) return true;
-        if (sheet.completedAt.getTime() !== cutoffAt.getTime()) return true;
+        if ((sheet.status !== "COMPLETED" && sheet.status !== "SKIPPED") || !cutoff) return true;
+        const cutoffAt = cutoff.completedAt ?? cutoff.skippedAt ?? cutoff.dueDate;
+        const sheetAt = sheet.status === "SKIPPED" ? sheet.skippedAt ?? sheet.dueDate : sheet.completedAt;
+        if (!cutoffAt || !sheetAt) return true;
+        if (sheetAt.getTime() !== cutoffAt.getTime()) return true;
         const cutoffHours = Number(cutoff.completedHours ?? cutoff.dueHours ?? 0);
         return Number(sheet.dueHours) >= cutoffHours;
       })
@@ -72,6 +74,7 @@ export async function GET() {
         status: sheet.status,
         issuedAt: sheet.issuedAt?.toISOString() ?? null,
         completedAt: sheet.completedAt?.toISOString() ?? null,
+        skippedAt: sheet.skippedAt?.toISOString() ?? null,
         pdfFilePath,
         completedHours: sheet.completedHours !== null ? Number(sheet.completedHours) : null,
       };
