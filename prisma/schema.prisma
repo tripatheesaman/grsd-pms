@@ -204,7 +204,9 @@ model DailyEntry {
 
   @@unique([equipmentId, entryDate, status])
   @@index([status])
+  @@index([status, entryDate])
   @@index([equipmentId, status])
+  @@index([equipmentId, status, entryDate])
   @@index([equipmentId, entryDate])
   @@index([entryDate])
   @@map("dailyentry")

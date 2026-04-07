@@ -1,6 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import nextDynamic from "next/dynamic";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Card, dashboardInputClass } from "@/components/dashboard/dashboard-card";
 import toast from "react-hot-toast";
 import { useLogout } from "@/hooks/use-auth";
 import {
@@ -63,11 +66,44 @@ import {
   useDeleteTechnician,
   type Technician,
 } from "@/hooks/use-dashboard-data";
-import { UserRole } from "@/types/api";
+import { EquipmentListItem, UserRole } from "@/types/api";
 import { formatDate } from "@/lib/utils/date";
-import { PendingEntryItem } from "@/hooks/use-dashboard-data";
 import type { CheckSheetItem, CheckSheetManagementItem } from "@/hooks/use-dashboard-data";
 import { BASE_PATH, UPLOADS_BASE_URL, apiPath } from "@/lib/config/app-config";
+
+const BULK_DRAFT_STORAGE_KEY = "grsd:bulk-entries-draft-v1";
+
+const PendingApprovalsSectionLazy = nextDynamic(
+  () =>
+    import("@/components/dashboard/sections/pending-approvals-section").then(
+      (m) => m.PendingApprovalsSection,
+    ),
+  {
+    loading: () => (
+      <div className="rounded-2xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-6 shadow-xl">
+        <div className="py-12 text-center text-sm font-medium text-[var(--color-text-soft)]">
+          Loading pending approvals…
+        </div>
+      </div>
+    ),
+    ssr: false,
+  },
+);
+
+const EntriesReportSectionLazy = nextDynamic(
+  () =>
+    import("@/components/dashboard/sections/entries-report-section").then((m) => m.EntriesReportSection),
+  {
+    loading: () => (
+      <div className="rounded-2xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-6 shadow-xl">
+        <div className="py-12 text-center text-sm font-medium text-[var(--color-text-soft)]">
+          Loading entries report…
+        </div>
+      </div>
+    ),
+    ssr: false,
+  },
+);
 
 type DashboardUser = {
   id: string;
@@ -75,249 +111,6 @@ type DashboardUser = {
   email: string;
   role: UserRole;
 };
-
-type PendingEntryCardProps = {
-  entry: PendingEntryItem;
-  onApprove: (id: string) => void;
-  onReject: (id: string, reason?: string) => void;
-  onUpdate: (id: string, entryDate: string, hoursRun: number) => void;
-  onDelete: (id: string) => void;
-  isApproving: boolean;
-  isRejecting: boolean;
-  isUpdating: boolean;
-  isDeleting: boolean;
-};
-
-function PendingEntryCard({ entry, onApprove, onReject, onUpdate, onDelete, isApproving, isRejecting, isUpdating, isDeleting }: PendingEntryCardProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editDate, setEditDate] = useState(entry.entryDate.slice(0, 10));
-  const [editHours, setEditHours] = useState(String(entry.hoursRun));
-  const [rejectReason, setRejectReason] = useState("");
-  const [showRejectModal, setShowRejectModal] = useState(false);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-
-  const unitLabel = entry.usageUnit === "KM" ? "Kilometers" : "Hours";
-  const hoursError = Number(editHours) < entry.previousHours
-    ? `${unitLabel} must be at least ${entry.previousHours.toFixed(2)} (previous entry value)`
-    : undefined;
-
-  return (
-    <div className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md">
-      <div className="flex items-start justify-between gap-4 mb-4">
-        <div className="flex-1">
-          <div className="flex items-center gap-3 mb-2">
-            <p className="text-base font-bold text-[var(--color-text)]">{entry.equipmentNumber}</p>
-            <span className="px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-800 text-xs font-bold">PENDING</span>
-          </div>
-          <p className="text-sm font-medium text-[var(--color-text-soft)] mb-1">Created by: {entry.createdBy} ({entry.createdByEmail})</p>
-          <p className="text-xs text-[var(--color-text-soft)]">Created: {formatDate(entry.createdAt)}</p>
-        </div>
-      </div>
-
-      {!isEditing ? (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-xs font-semibold text-[var(--color-text-soft)] mb-1">Entry Date</p>
-              <p className="text-sm font-bold text-[var(--color-text)]">{formatDate(entry.entryDate)}</p>
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-[var(--color-text-soft)] mb-1">{unitLabel === "Kilometers" ? "Kilometers" : "Hours Run"}</p>
-              <p className="text-sm font-bold text-[var(--color-text)]">{entry.hoursRun.toFixed(2)}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4 pt-3 border-t-2 border-[var(--color-surface-strong)]">
-            <div>
-              <p className="text-xs font-semibold text-[var(--color-text-soft)] mb-1">Previous Entry Date</p>
-              <p className="text-sm font-medium text-[var(--color-text)]">
-                {entry.previousEntryDate ? formatDate(entry.previousEntryDate) : "N/A"}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-[var(--color-text-soft)] mb-1">Previous {unitLabel}</p>
-              <p className="text-sm font-medium text-[var(--color-text)]">{entry.previousHours.toFixed(2)}</p>
-            </div>
-          </div>
-          <div className="pt-3 border-t-2 border-[var(--color-surface-strong)]">
-            <p className="text-xs font-semibold text-[var(--color-text-soft)] mb-1">Current Equipment {unitLabel}</p>
-            <p className="text-sm font-medium text-[var(--color-text)]">{entry.currentEquipmentHours.toFixed(2)}</p>
-          </div>
-          <div className="flex gap-2 pt-3">
-            <button
-              type="button"
-              onClick={() => setIsEditing(true)}
-              className="flex-1 rounded-lg border-2 border-[var(--color-primary)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)] hover:text-white"
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowRejectModal(true)}
-              className="flex-1 rounded-lg border-2 border-red-400 bg-white px-4 py-2 text-sm font-bold text-red-600 transition-all hover:bg-red-400 hover:text-white"
-            >
-              Reject
-            </button>
-            <button
-              type="button"
-              onClick={() => onApprove(entry.id)}
-              disabled={isApproving || Number(entry.hoursRun) < entry.previousHours}
-              className="flex-1 rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isApproving ? "Approving..." : "Approve"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowDeleteModal(true)}
-              disabled={isDeleting}
-              className="rounded-lg border-2 border-red-400 bg-white px-4 py-2 text-sm font-bold text-red-600 transition-all hover:bg-red-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Delete
-            </button>
-          </div>
-          {Number(entry.hoursRun) < entry.previousHours && (
-            <p className="text-xs font-medium text-red-600 mt-2">
-              ⚠️ {unitLabel} must be at least {entry.previousHours.toFixed(2)} (previous entry value)
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">Entry Date</label>
-              <input
-                type="date"
-                value={editDate}
-                onChange={(e) => setEditDate(e.target.value)}
-                className="h-10 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-[var(--color-text-soft)]">{unitLabel === "Kilometers" ? "Kilometers" : "Hours Run"}</label>
-              <input
-                type="number"
-                min={entry.previousHours}
-                step={0.1}
-                value={editHours}
-                onChange={(e) => setEditHours(e.target.value)}
-                className={`h-10 w-full rounded-lg border-2 ${hoursError ? "border-red-400" : "border-[var(--color-surface-strong)]"} bg-white px-3 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20`}
-              />
-              {hoursError && (
-                <p className="mt-1 text-xs font-medium text-red-600">{hoursError}</p>
-              )}
-            </div>
-          </div>
-          <div className="flex gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => {
-                onUpdate(entry.id, new Date(`${editDate}T00:00:00.000Z`).toISOString(), Number(editHours));
-                setIsEditing(false);
-              }}
-              disabled={isUpdating || !!hoursError || !editDate || !editHours}
-              className="flex-1 rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isUpdating ? "Saving..." : "Save"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsEditing(false);
-                setEditDate(entry.entryDate.slice(0, 10));
-                setEditHours(String(entry.hoursRun));
-              }}
-              className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {showRejectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowRejectModal(false)}>
-          <div className="relative w-full max-w-md rounded-2xl bg-gradient-to-br from-white to-[var(--color-surface)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-[var(--color-text)] mb-4">Reject Entry</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-[var(--color-text)]">Reason (Optional)</label>
-                <textarea
-                  value={rejectReason}
-                  onChange={(e) => setRejectReason(e.target.value)}
-                  className="h-24 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 py-2 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-red-400 focus:ring-2 focus:ring-red-400/20"
-                  placeholder="Enter rejection reason..."
-                />
-              </div>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onReject(entry.id, rejectReason);
-                    setShowRejectModal(false);
-                    setRejectReason("");
-                  }}
-                  disabled={isRejecting}
-                  className="flex-1 rounded-lg bg-gradient-to-r from-red-500 to-red-600 px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isRejecting ? "Rejecting..." : "Reject"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowRejectModal(false);
-                    setRejectReason("");
-                  }}
-                  className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showDeleteModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setShowDeleteModal(false)}>
-          <div className="relative w-full max-w-md rounded-2xl bg-gradient-to-br from-white to-[var(--color-surface)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-[var(--color-text)] mb-4">Delete Entry</h3>
-            <div className="space-y-4">
-              <p className="text-sm font-medium text-[var(--color-text-soft)]">
-                Are you sure you want to delete this entry? This action cannot be undone.
-              </p>
-              <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-3">
-                <p className="text-xs font-semibold text-yellow-800 mb-1">Entry Details:</p>
-                <p className="text-xs text-yellow-700">Equipment: {entry.equipmentNumber}</p>
-                <p className="text-xs text-yellow-700">Date: {formatDate(entry.entryDate)}</p>
-                <p className="text-xs text-yellow-700">Hours: {entry.hoursRun.toFixed(2)}</p>
-              </div>
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDelete(entry.id);
-                    setShowDeleteModal(false);
-                  }}
-                  disabled={isDeleting}
-                  className="flex-1 rounded-lg bg-gradient-to-r from-red-500 to-red-600 px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isDeleting ? "Deleting..." : "Delete"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowDeleteModal(false)}
-                  className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 type WeeklyPlanItem = {
   week: number;
@@ -791,6 +584,7 @@ const sections = [
 ] as const;
 
 export function AppDashboard({ user }: { user: DashboardUser }) {
+  const queryClient = useQueryClient();
   const useDebouncedValue = <T,>(value: T, delayMs: number) => {
     const [debouncedValue, setDebouncedValue] = useState(value);
     useEffect(() => {
@@ -801,14 +595,28 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   };
 
   const logout = useLogout();
-  const analytics = useAnalytics();
-  const equipments = useEquipments();
-  const alerts = useAlerts();
+  const [activeSection, setActiveSection] = useState<(typeof sections)[number]["key"]>("overview");
+  const analyticsSectionActive = activeSection === "overview";
+  const checksSectionActive =
+    activeSection === "overview" ||
+    activeSection === "checks" ||
+    activeSection === "ongoing-checks" ||
+    activeSection === "completed-checks" ||
+    activeSection === "all-checks" ||
+    activeSection === "equipment-management";
+  const adminSectionActive = activeSection === "admin";
+  const entriesSectionActive = activeSection === "entries" || activeSection === "entries-report";
+  const approvalsSectionActive = activeSection === "pending-approvals";
+  const techniciansSectionActive = activeSection === "technician-management";
+  const historySectionActive = activeSection === "equipment-history";
+  const analytics = useAnalytics(analyticsSectionActive);
+  const equipments = useEquipments(true);
+  const alerts = useAlerts(analyticsSectionActive);
   const acknowledgeAlert = useAcknowledgeAlert();
-  const checksheets = useCheckSheets();
-  const notifications = useNotifications();
+  const checksheets = useCheckSheets(checksSectionActive);
+  const notifications = useNotifications(analyticsSectionActive);
   const markNotificationRead = useMarkNotificationRead();
-  const forecastDrift = useForecastDrift();
+  const forecastDrift = useForecastDrift(analyticsSectionActive);
   const runEscalation = useRunEscalation();
   const canAdmin = user.role === "ADMIN" || user.role === "SUPERADMIN";
   const isSuperadmin = user.role === "SUPERADMIN";
@@ -822,16 +630,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const createEntry = useCreateEntry();
   const createEntriesBulk = useCreateEntriesBulk();
   const updateCheckSheet = useUpdateCheckSheet();
-  const systemConfig = useSystemConfig();
+  const systemConfig = useSystemConfig(adminSectionActive);
   const updateSystemConfig = useUpdateSystemConfig();
-  const pendingEntries = usePendingEntries();
+  const pendingEntries = usePendingEntries(approvalsSectionActive);
   const approveEntry = useApproveEntry();
   const approveEntriesByDate = useApproveEntriesByDate();
   const rejectEntriesByDate = useRejectEntriesByDate();
   const rejectEntry = useRejectEntry();
   const updateEntry = useUpdateEntry();
   const deleteEntry = useDeleteEntry();
-  const technicians = useTechnicians();
+  const technicians = useTechnicians(techniciansSectionActive);
   const createTechnician = useCreateTechnician();
   const updateTechnician = useUpdateTechnician();
   const deleteTechnician = useDeleteTechnician();
@@ -857,7 +665,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     }
   }, [systemConfig.data]);
 
-  const [activeSection, setActiveSection] = useState<(typeof sections)[number]["key"]>("overview");
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(null);
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
   const [entryHours, setEntryHours] = useState("0");
@@ -882,6 +689,56 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const [bulkReviewEntries, setBulkReviewEntries] = useState<Array<{ equipmentId: string; hours: string; previous: number }>>([]);
   const [confirmBulkWarnings, setConfirmBulkWarnings] = useState(false);
   const equipmentSearchRef = useRef<HTMLDivElement>(null);
+  const [bulkBaselineRefreshPending, setBulkBaselineRefreshPending] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem(BULK_DRAFT_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        entryDate?: string;
+        entries?: Array<{ equipmentId: string; hours: string; previous: number; error?: string }>;
+      };
+      if (!parsed.entries?.length) return;
+      setBulkMode(true);
+      if (parsed.entryDate) setEntryDate(parsed.entryDate);
+      setBulkEntries(parsed.entries);
+      void (async () => {
+        await queryClient.refetchQueries({ queryKey: ["equipment", "list"] });
+        const list = queryClient.getQueryData<EquipmentListItem[]>(["equipment", "list"]) ?? [];
+        const byId = new Map(list.map((e) => [e.id, e]));
+        setBulkEntries((prev) =>
+          prev.map((row) => {
+            const eq = byId.get(row.equipmentId);
+            if (!eq) return row;
+            const previous = Number(eq.currentHours ?? 0);
+            const hoursNum = Number(row.hours);
+            const hours =
+              row.hours === "" || Number.isNaN(hoursNum) || hoursNum < previous
+                ? previous.toFixed(2)
+                : row.hours;
+            return { ...row, previous, hours, error: undefined };
+          }),
+        );
+      })();
+    } catch {
+      /* ignore malformed draft */
+    }
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!bulkMode || bulkEntries.length === 0) return;
+    try {
+      sessionStorage.setItem(
+        BULK_DRAFT_STORAGE_KEY,
+        JSON.stringify({ bulkMode: true, entryDate, entries: bulkEntries }),
+      );
+    } catch {
+      /* storage full or unavailable */
+    }
+  }, [bulkMode, bulkEntries, entryDate]);
 
   const yearOptions = useMemo(() => {
     const current = new Date().getFullYear();
@@ -1094,7 +951,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const deleteCheckRule = useDeleteCheckRule();
   const updateCheckSheetDetail = useUpdateCheckSheetDetail();
   const deleteCheckSheetDetail = useDeleteCheckSheetDetail();
-  const allCheckSheets = useAllCheckSheets();
+  const allCheckSheets = useAllCheckSheets(activeSection === "equipment-management");
   const uploadCheckSheetPdf = useUploadCheckSheetPdf();
   const deleteCheckSheetPdf = useDeleteCheckSheetPdf();
   const uploadCheckRuleTemplatePdf = useUploadCheckRuleTemplatePdf();
@@ -1193,9 +1050,10 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     equipmentTo: entriesReportEquipmentTo || undefined,
     dateFrom: entriesReportDateFrom || undefined,
     dateTo: entriesReportDateTo || undefined,
-  });
+  }, entriesSectionActive);
 
   const filteredAllChecks = useMemo(() => {
+    if (activeSection !== "equipment-management") return [];
     const rawAll: CheckSheetManagementItem[] = (checksheets.data ?? [])
       .filter((s) => s.status === "ISSUED" || s.status === "COMPLETED")
       .map((s) => {
@@ -1269,12 +1127,22 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     }
     
     return result;
-  }, [allCheckSheets.data, checkSheetMgmtSearch, checkSheetMgmtStatusFilter, checkSheetMgmtEquipmentFilter, checkSheetMgmtCodeFilter, checkSheetMgmtDateFrom, checkSheetMgmtDateTo]);
+  }, [
+    activeSection,
+    checksheets.data,
+    allCheckSheets.data,
+    checkSheetMgmtSearch,
+    checkSheetMgmtStatusFilter,
+    checkSheetMgmtEquipmentFilter,
+    checkSheetMgmtCodeFilter,
+    checkSheetMgmtDateFrom,
+    checkSheetMgmtDateTo,
+  ]);
 
   const history = useEquipmentHistory(historyEquipmentId, {
     from: historyDateFrom || undefined,
     to: historyDateTo || undefined,
-  });
+  }, historySectionActive);
 
   const handleExportHistory = () => {
     if (!history.data) {
@@ -1440,17 +1308,49 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     },
     activeSection === "completed-checks",
   );
-  const equipmentOptions = equipments.data ?? [];
+  const equipmentOptions = useMemo(() => equipments.data ?? [], [equipments.data]);
+  const equipmentById = useMemo(
+    () => new Map(equipmentOptions.map((equipment) => [equipment.id, equipment])),
+    [equipmentOptions],
+  );
   const bulkEquipmentList = useMemo(
     () =>
       [...equipmentOptions].sort((a, b) =>
         equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber),
       ),
-    [equipmentOptions],
+    [equipmentOptions, equipmentNumberCollator],
   );
+
+  const refetchBulkPreviousFromEquipment = useCallback(async () => {
+    setBulkBaselineRefreshPending(true);
+    try {
+      await queryClient.refetchQueries({ queryKey: ["equipment", "list"] });
+      const list = queryClient.getQueryData<EquipmentListItem[]>(["equipment", "list"]) ?? [];
+      const byId = new Map(list.map((e) => [e.id, e]));
+      setBulkEntries((prev) =>
+        prev.map((row) => {
+          const eq = byId.get(row.equipmentId);
+          if (!eq) return row;
+          const previous = Number(eq.currentHours ?? 0);
+          const hoursNum = Number(row.hours);
+          const hours =
+            row.hours === "" || Number.isNaN(hoursNum) || hoursNum < previous
+              ? previous.toFixed(2)
+              : row.hours;
+          return { ...row, previous, hours, error: undefined };
+        }),
+      );
+      toast.success("Refreshed minimum hours from latest equipment data");
+    } catch {
+      toast.error("Could not refresh equipment data");
+    } finally {
+      setBulkBaselineRefreshPending(false);
+    }
+  }, [queryClient]);
+
   const stats = analytics.data;
-  const allChecks = checksheets.data ?? [];
-  const allAlerts = alerts.data ?? [];
+  const allChecks = useMemo(() => checksheets.data ?? [], [checksheets.data]);
+  const allAlerts = useMemo(() => alerts.data ?? [], [alerts.data]);
   const notificationItems = notifications.data ?? [];
   const driftItems = forecastDrift.data ?? [];
   const catalog = permissionCatalog.data ?? [];
@@ -1461,37 +1361,38 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   }, [allAlerts, alertFilter]);
 
   const filteredChecks = useMemo(() => {
+    if (!checksSectionActive) return [];
     let checks = allChecks.filter((check) => check.status !== "ISSUED" && check.status !== "COMPLETED");
 
-    if (checkFilter !== "ALL") {
-      checks = checks.filter((check) => check.status === checkFilter);
+    if (deferredCheckFilter !== "ALL") {
+      checks = checks.filter((check) => check.status === deferredCheckFilter);
     }
 
-    if (checkDateFrom) {
-      const fromDate = new Date(checkDateFrom);
+    if (deferredCheckDateFrom) {
+      const fromDate = new Date(deferredCheckDateFrom);
       checks = checks.filter((check) => new Date(check.dueDate) >= fromDate);
     }
 
-    if (checkDateTo) {
-      const toDate = new Date(checkDateTo);
+    if (deferredCheckDateTo) {
+      const toDate = new Date(deferredCheckDateTo);
       toDate.setHours(23, 59, 59, 999);
       checks = checks.filter((check) => new Date(check.dueDate) <= toDate);
     }
 
-    if (checkEquipmentSearch.trim()) {
-      const search = checkEquipmentSearch.toLowerCase().trim();
+    if (deferredCheckEquipmentSearch.trim()) {
+      const search = deferredCheckEquipmentSearch.toLowerCase().trim();
       checks = checks.filter((check) =>
         check.equipmentNumber.toLowerCase().includes(search) ||
         check.equipmentName.toLowerCase().includes(search)
       );
     }
 
-    if (checkCodeFilter) {
-      checks = checks.filter((check) => check.checkCode === checkCodeFilter);
+    if (deferredCheckCodeFilter) {
+      checks = checks.filter((check) => check.checkCode === deferredCheckCodeFilter);
     }
 
-    if (checkTriggerTypeFilter !== "ALL") {
-      checks = checks.filter((check) => check.triggerType === checkTriggerTypeFilter);
+    if (deferredCheckTriggerTypeFilter !== "ALL") {
+      checks = checks.filter((check) => check.triggerType === deferredCheckTriggerTypeFilter);
     }
 
     const now = new Date().getTime();
@@ -1500,7 +1401,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       const daysB = Math.ceil((new Date(b.dueDate).getTime() - now) / (1000 * 60 * 60 * 24));
       return daysA - daysB;
     });
-  }, [allChecks, checkFilter, checkDateFrom, checkDateTo, checkEquipmentSearch, checkCodeFilter, checkTriggerTypeFilter]);
+  }, [
+    allChecks,
+    checksSectionActive,
+    deferredCheckFilter,
+    deferredCheckDateFrom,
+    deferredCheckDateTo,
+    deferredCheckEquipmentSearch,
+    deferredCheckCodeFilter,
+    deferredCheckTriggerTypeFilter,
+  ]);
 
   const getAlertLevelColor = (level: string) => {
     switch (level) {
@@ -1632,8 +1542,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
 
   const selectedEquipment = useMemo(() => {
     if (!selectedEquipmentModal) return null;
-    return equipmentOptions.find((eq) => eq.id === selectedEquipmentModal);
-  }, [equipmentOptions, selectedEquipmentModal]);
+    return equipmentById.get(selectedEquipmentModal) ?? null;
+  }, [equipmentById, selectedEquipmentModal]);
 
   const selectedAlert = useMemo(() => {
     if (!selectedAlertModal) return null;
@@ -1679,7 +1589,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       return;
     }
 
-    const selectedEquipment = selectedEquipmentId ? equipmentOptions.find((e) => e.id === selectedEquipmentId) : null;
+    const selectedEquipment = selectedEquipmentId ? (equipmentById.get(selectedEquipmentId) ?? null) : null;
     const enteredHours = Number(entryHours);
 
     let hasError = false;
@@ -1713,7 +1623,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       },
       {
         onSuccess: () => {
-          const equipment = equipmentOptions.find((e) => e.id === selectedEquipmentId);
+          const equipment = selectedEquipmentId ? equipmentById.get(selectedEquipmentId) : undefined;
           toast.success(`Entry recorded for ${equipment?.equipmentNumber || "equipment"}`);
           setSelectedEquipmentId(null);
           setEntryHours("0");
@@ -1769,6 +1679,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
         setBulkEntries([]);
         setBulkReviewEntries([]);
         setConfirmBulkWarnings(false);
+        setBulkMode(false);
+        try {
+          sessionStorage.removeItem(BULK_DRAFT_STORAGE_KEY);
+        } catch {
+          /* ignore */
+        }
       }
       if (result.failed.length > 0) {
         const top = result.failed.slice(0, 3);
@@ -2653,6 +2569,11 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     type="button"
                     onClick={() => {
                       setBulkMode(false);
+                      try {
+                        sessionStorage.removeItem(BULK_DRAFT_STORAGE_KEY);
+                      } catch {
+                        /* ignore */
+                      }
                       setSelectedEquipmentId(null);
                       setEquipmentSearch("");
                       setEntryHours("0");
@@ -2819,15 +2740,25 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       />
                     </div>
                     <div className="space-y-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <label className="text-sm font-bold text-[var(--color-text)]">Equipment Entries</label>
-                        <span className="text-xs font-medium text-[var(--color-text-soft)]">
-                          {bulkEntries.filter((e) => {
-                            const value = Number(e.hours);
-                            return e.equipmentId && !Number.isNaN(value) && value > 0 && value >= e.previous;
-                          }).length}{" "}
-                          of {bulkEntries.length} ready
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void refetchBulkPreviousFromEquipment()}
+                            disabled={bulkBaselineRefreshPending || bulkEntries.length === 0}
+                            className="rounded-lg border-2 border-[var(--color-primary)]/40 bg-[var(--color-primary)]/10 px-3 py-1.5 text-xs font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)]/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {bulkBaselineRefreshPending ? "Refreshing…" : "Refresh minimum hours"}
+                          </button>
+                          <span className="text-xs font-medium text-[var(--color-text-soft)]">
+                            {bulkEntries.filter((e) => {
+                              const value = Number(e.hours);
+                              return e.equipmentId && !Number.isNaN(value) && value > 0 && value >= e.previous;
+                            }).length}{" "}
+                            of {bulkEntries.length} ready
+                          </span>
+                        </div>
                       </div>
                       <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
                         {bulkEntries.map((entry, index) => {
@@ -2927,356 +2858,51 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           )}
 
           {activeSection === "entries-report" && (
-            <div className="space-y-6">
-              {canAdmin ? (
-                <Card title="Entries Report">
-                  {allEntries.isLoading ? (
-                    <div className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">
-                      Loading entries...
-                    </div>
-                  ) : (
-                    <>
-                      <div className="mb-4 space-y-4">
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Search</label>
-                            <input
-                              type="text"
-                              value={entriesReportSearch}
-                              onChange={(e) => setEntriesReportSearch(e.target.value)}
-                              placeholder="Equipment number, name..."
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            />
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Status</label>
-                            <select
-                              value={entriesReportStatusFilter}
-                              onChange={(e) => setEntriesReportStatusFilter(e.target.value as typeof entriesReportStatusFilter)}
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            >
-                              <option value="ALL">All Status</option>
-                              <option value="PENDING">Pending</option>
-                              <option value="APPROVED">Approved</option>
-                              <option value="REJECTED">Rejected</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment</label>
-                            <select
-                              value={entriesReportEquipmentFilter}
-                              onChange={(e) => setEntriesReportEquipmentFilter(e.target.value)}
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-semibold text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            >
-                              <option value="ALL">All Equipment</option>
-                              {Array.from(
-                                new Map(
-                                  (allEntries.data ?? []).map((e) => [e.equipmentId, e]),
-                                ).values(),
-                              )
-                                .sort((a, b) =>
-                                  equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber),
-                                )
-                                .map((entry) => (
-                                  <option key={entry.equipmentId} value={entry.equipmentId}>
-                                    {entry.equipmentNumber} - {entry.equipmentName}
-                                  </option>
-                                ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment From</label>
-                            <input
-                              type="text"
-                              value={entriesReportEquipmentFrom}
-                              onChange={(e) => setEntriesReportEquipmentFrom(e.target.value)}
-                              placeholder="e.g. 1001"
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            />
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Equipment To</label>
-                            <input
-                              type="text"
-                              value={entriesReportEquipmentTo}
-                              onChange={(e) => setEntriesReportEquipmentTo(e.target.value)}
-                              placeholder="e.g. 1010"
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            />
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Date From</label>
-                            <input
-                              type="date"
-                              value={entriesReportDateFrom}
-                              onChange={(e) => setEntriesReportDateFrom(e.target.value)}
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            />
-                          </div>
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold text-[var(--color-text-soft)]">Date To</label>
-                            <input
-                              type="date"
-                              value={entriesReportDateTo}
-                              onChange={(e) => setEntriesReportDateTo(e.target.value)}
-                              min={entriesReportDateFrom || undefined}
-                              className="h-9 w-full rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-3 text-xs font-medium text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/20"
-                            />
-                          </div>
-                        </div>
-                        <div className="flex items-center justify-between flex-wrap gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-semibold text-[var(--color-text-soft)]">
-                              Showing {(() => {
-                                let filtered = (allEntries.data ?? []).filter((e) => {
-                                  if (entriesReportSearch) {
-                                    const search = entriesReportSearch.toLowerCase();
-                                    if (!e.equipmentNumber.toLowerCase().includes(search) && !e.equipmentName.toLowerCase().includes(search)) {
-                                      return false;
-                                    }
-                                  }
-                                  return true;
-                                });
-                                return filtered.length;
-                              })()} of {allEntries.data?.length ?? 0} entries
-                            </span>
-                            {(entriesReportSearch ||
-                              entriesReportStatusFilter !== "ALL" ||
-                              entriesReportEquipmentFilter !== "ALL" ||
-                              entriesReportEquipmentFrom ||
-                              entriesReportEquipmentTo ||
-                              entriesReportDateFrom ||
-                              entriesReportDateTo) && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEntriesReportSearch("");
-                                  setEntriesReportStatusFilter("ALL");
-                                  setEntriesReportEquipmentFilter("ALL");
-                                  setEntriesReportEquipmentFrom("");
-                                  setEntriesReportEquipmentTo("");
-                                  setEntriesReportDateFrom("");
-                                  setEntriesReportDateTo("");
-                                }}
-                                className="text-xs font-semibold text-[var(--color-accent)] hover:text-[var(--color-accent-dark)] transition-colors"
-                              >
-                                Clear Filters
-                              </button>
-                            )}
-                          </div>
-                          <div className="flex items-end justify-end">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const params = new URLSearchParams();
-                                if (entriesReportStatusFilter && entriesReportStatusFilter !== "ALL") {
-                                  params.set("status", entriesReportStatusFilter);
-                                }
-                                if (entriesReportEquipmentFilter && entriesReportEquipmentFilter !== "ALL") {
-                                  params.set("equipmentId", entriesReportEquipmentFilter);
-                                }
-                                if (entriesReportEquipmentFrom.trim()) {
-                                  params.set("equipmentFrom", entriesReportEquipmentFrom.trim());
-                                }
-                                if (entriesReportEquipmentTo.trim()) {
-                                  params.set("equipmentTo", entriesReportEquipmentTo.trim());
-                                }
-                                if (entriesReportDateFrom) {
-                                  params.set("dateFrom", entriesReportDateFrom);
-                                }
-                                if (entriesReportDateTo) {
-                                  params.set("dateTo", entriesReportDateTo);
-                                }
-                                const query = params.toString();
-                                const url = apiPath(`/api/entries/export${query ? `?${query}` : ""}`);
-                                window.open(url, "_blank");
-                              }}
-                              className="inline-flex items-center rounded-lg bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] px-3 py-2 text-xs font-bold text-white shadow-md transition-all hover:scale-[1.02] hover:shadow-lg"
-                            >
-                              Export CSV
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="space-y-3 max-h-[600px] overflow-y-auto">
-                        {(() => {
-                          let filtered = (allEntries.data ?? []).filter((e) => {
-                            if (entriesReportSearch) {
-                              const search = entriesReportSearch.toLowerCase();
-                              if (!e.equipmentNumber.toLowerCase().includes(search) && !e.equipmentName.toLowerCase().includes(search)) {
-                                return false;
-                              }
-                            }
-                            return true;
-                          });
-
-                          filtered.sort((a, b) => {
-                            const cmp = equipmentNumberCollator.compare(a.equipmentNumber, b.equipmentNumber);
-                            if (cmp !== 0) return cmp;
-                            return new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime();
-                          });
-
-                          return filtered.length === 0 ? (
-                            <div className="py-12 text-center">
-                              <p className="text-sm font-medium text-[var(--color-text-soft)]">No entries found</p>
-                              <p className="text-xs text-[var(--color-text-soft)] mt-1">Try adjusting your filters</p>
-                            </div>
-                          ) : (
-                            filtered.map((entry) => {
-                              const statusColors = {
-                                PENDING: "bg-yellow-100 text-yellow-800 border-yellow-300",
-                                APPROVED: "bg-green-100 text-green-800 border-green-300",
-                                REJECTED: "bg-red-100 text-red-800 border-red-300",
-                              };
-                              return (
-                                <div
-                                  key={entry.id}
-                                  className="rounded-xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-5 shadow-md hover:shadow-lg transition-all"
-                                >
-                                  <div className="flex items-start justify-between gap-4">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                        <p className="text-base font-bold text-[var(--color-text)]">{entry.equipmentNumber}</p>
-                                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${statusColors[entry.status as keyof typeof statusColors]}`}>
-                                          {entry.status}
-                                        </span>
-                                        <span className="text-xs font-medium text-[var(--color-text-soft)]">{entry.equipmentName}</span>
-                                      </div>
-                                      <div className="grid grid-cols-2 gap-4 text-xs mb-2">
-                                        <div>
-                                          <p className="font-semibold text-[var(--color-text-soft)]">Entry Date</p>
-                                          <p className="font-bold text-[var(--color-text)]">{formatDate(entry.entryDate)}</p>
-                                        </div>
-                                        <div>
-                                          <p className="font-semibold text-[var(--color-text-soft)]">
-                                            {entry.usageUnit === "KM" ? "Kilometers" : "Hours Run"}
-                                          </p>
-                                          <p className="font-bold text-[var(--color-text)]">{entry.hoursRun.toFixed(2)}</p>
-                                        </div>
-                                        <div>
-                                          <p className="font-semibold text-[var(--color-text-soft)]">Created By</p>
-                                          <p className="font-bold text-[var(--color-text)]">{entry.createdBy}</p>
-                                        </div>
-                                        <div>
-                                          <p className="font-semibold text-[var(--color-text-soft)]">Created At</p>
-                                          <p className="font-bold text-[var(--color-text)]">{formatDate(entry.createdAt)}</p>
-                                        </div>
-                                        {entry.approvedBy && (
-                                          <>
-                                            <div>
-                                              <p className="font-semibold text-[var(--color-text-soft)]">Approved By</p>
-                                              <p className="font-bold text-[var(--color-text)]">{entry.approvedBy}</p>
-                                            </div>
-                                            <div>
-                                              <p className="font-semibold text-[var(--color-text-soft)]">Approved At</p>
-                                              <p className="font-bold text-[var(--color-text)]">{entry.approvedAt ? formatDate(entry.approvedAt) : "N/A"}</p>
-                                            </div>
-                                          </>
-                                        )}
-                                        {entry.rejectedBy && (
-                                          <>
-                                            <div>
-                                              <p className="font-semibold text-[var(--color-text-soft)]">Rejected By</p>
-                                              <p className="font-bold text-[var(--color-text)]">{entry.rejectedBy}</p>
-                                            </div>
-                                            <div>
-                                              <p className="font-semibold text-[var(--color-text-soft)]">Rejected At</p>
-                                              <p className="font-bold text-[var(--color-text)]">{entry.rejectedAt ? formatDate(entry.rejectedAt) : "N/A"}</p>
-                                            </div>
-                                          </>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div className="flex flex-col gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setEditingEntryId(entry.id);
-                                          setEditEntryDate(entry.entryDate.slice(0, 10));
-                                          setEditEntryHours(String(entry.hoursRun));
-                                        }}
-                                        className="rounded-lg border-2 border-[var(--color-primary)] bg-white px-3 py-1.5 text-xs font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)] hover:text-white"
-                                      >
-                                        Edit
-                                      </button>
-                                      {entry.status === "PENDING" && (
-                                        <>
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              approveEntry.mutate(entry.id, {
-                                                onSuccess: () => {
-                                                  toast.success("Entry approved successfully");
-                                                },
-                                                onError: (error) => {
-                                                  toast.error(error instanceof Error ? error.message : "Failed to approve entry");
-                                                },
-                                              });
-                                            }}
-                                            className="rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
-                                          >
-                                            Approve
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              rejectEntry.mutate({ entryId: entry.id }, {
-                                                onSuccess: () => {
-                                                  toast.success("Entry rejected");
-                                                },
-                                                onError: (error) => {
-                                                  toast.error(error instanceof Error ? error.message : "Failed to reject entry");
-                                                },
-                                              });
-                                            }}
-                                            className="rounded-lg bg-gradient-to-r from-red-500 to-red-600 px-3 py-1.5 text-xs font-bold text-white shadow-md transition-all hover:scale-105 hover:shadow-lg"
-                                          >
-                                            Reject
-                                          </button>
-                                        </>
-                                      )}
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setDeleteConfirmModal({
-                                            type: "entry",
-                                            id: entry.id,
-                                            name: `Entry for ${entry.equipmentNumber} on ${formatDate(entry.entryDate)}`,
-                                            onConfirm: () => {
-                                              deleteEntry.mutate(entry.id, {
-                                                onSuccess: () => {
-                                                  toast.success("Entry deleted successfully");
-                                                  setDeleteConfirmModal(null);
-                                                },
-                                                onError: (error) => {
-                                                  toast.error(error instanceof Error ? error.message : "Failed to delete entry");
-                                                  setDeleteConfirmModal(null);
-                                                },
-                                              });
-                                            },
-                                          });
-                                        }}
-                                        className="rounded-lg border-2 border-red-500 bg-white px-3 py-1.5 text-xs font-bold text-red-500 transition-all hover:bg-red-500 hover:text-white"
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })
-                          );
-                        })()}
-                      </div>
-                    </>
-                  )}
-                </Card>
-              ) : (
-                <Card title="Entries Report">
-                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Admin access required</p>
-                </Card>
-              )}
-            </div>
+            <EntriesReportSectionLazy
+              canAdmin={canAdmin}
+              allEntries={allEntries}
+              entriesReportSearch={entriesReportSearch}
+              setEntriesReportSearch={setEntriesReportSearch}
+              entriesReportStatusFilter={entriesReportStatusFilter}
+              setEntriesReportStatusFilter={setEntriesReportStatusFilter}
+              entriesReportEquipmentFilter={entriesReportEquipmentFilter}
+              setEntriesReportEquipmentFilter={setEntriesReportEquipmentFilter}
+              entriesReportEquipmentFrom={entriesReportEquipmentFrom}
+              setEntriesReportEquipmentFrom={setEntriesReportEquipmentFrom}
+              entriesReportEquipmentTo={entriesReportEquipmentTo}
+              setEntriesReportEquipmentTo={setEntriesReportEquipmentTo}
+              entriesReportDateFrom={entriesReportDateFrom}
+              setEntriesReportDateFrom={setEntriesReportDateFrom}
+              entriesReportDateTo={entriesReportDateTo}
+              setEntriesReportDateTo={setEntriesReportDateTo}
+              equipmentNumberCollator={equipmentNumberCollator}
+              onEditEntry={(entry) => {
+                setEditingEntryId(entry.id);
+                setEditEntryDate(entry.entryDate.slice(0, 10));
+                setEditEntryHours(String(entry.hoursRun));
+              }}
+              onRequestDeleteEntry={(entry) => {
+                setDeleteConfirmModal({
+                  type: "entry",
+                  id: entry.id,
+                  name: `Entry for ${entry.equipmentNumber} on ${formatDate(entry.entryDate)}`,
+                  onConfirm: () => {
+                    deleteEntry.mutate(entry.id, {
+                      onSuccess: () => {
+                        toast.success("Entry deleted successfully");
+                        setDeleteConfirmModal(null);
+                      },
+                      onError: (error) => {
+                        toast.error(error instanceof Error ? error.message : "Failed to delete entry");
+                        setDeleteConfirmModal(null);
+                      },
+                    });
+                  },
+                });
+              }}
+              approveEntry={approveEntry}
+              rejectEntry={rejectEntry}
+            />
           )}
 
           {activeSection === "planning" && (
@@ -3302,7 +2928,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         }}
                         onFocus={() => setEquipmentSearchOpen(true)}
                         onKeyDown={handleEquipmentKeyDown}
-                        className={inputClass}
+                        className={dashboardInputClass}
                         placeholder="Type to search equipment..."
                         autoComplete="off"
                       />
@@ -3342,7 +2968,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         setCurrentWeek(new Date(newYear, new Date().getMonth(), new Date().getDate()));
                         setCurrentDay(new Date(newYear, new Date().getMonth(), new Date().getDate()));
                       }}
-                      className={inputClass}
+                      className={dashboardInputClass}
                     >
                       {yearOptions.map((value) => (
                         <option key={value} value={String(value)}>
@@ -3356,7 +2982,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     <select
                       value={calendarView}
                       onChange={(e) => setCalendarView(e.target.value as "monthly" | "weekly" | "daily" | "yearly")}
-                      className={inputClass}
+                      className={dashboardInputClass}
                     >
                       <option value="monthly">Monthly</option>
                       <option value="weekly">Weekly</option>
@@ -3426,7 +3052,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       <select
                         value={planExportMode}
                         onChange={(e) => setPlanExportMode(e.target.value as typeof planExportMode)}
-                        className={inputClass}
+                        className={dashboardInputClass}
                       >
                         <option value="equipment">Equipment-wise CSV</option>
                         <option value="pictorial">Pictorial Report (HTML)</option>
@@ -3439,7 +3065,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         value={planExportEquipmentFrom}
                         onChange={(e) => setPlanExportEquipmentFrom(e.target.value)}
                         placeholder="e.g. EQ-0001"
-                        className={inputClass}
+                        className={dashboardInputClass}
                       />
                     </div>
                     <div>
@@ -3449,7 +3075,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         value={planExportEquipmentTo}
                         onChange={(e) => setPlanExportEquipmentTo(e.target.value)}
                         placeholder="e.g. EQ-0100"
-                        className={inputClass}
+                        className={dashboardInputClass}
                       />
                     </div>
                     <div>
@@ -3458,7 +3084,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         type="date"
                         value={planExportDateFrom}
                         onChange={(e) => setPlanExportDateFrom(e.target.value)}
-                        className={inputClass}
+                        className={dashboardInputClass}
                       />
                     </div>
                     <div>
@@ -3467,7 +3093,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         type="date"
                         value={planExportDateTo}
                         onChange={(e) => setPlanExportDateTo(e.target.value)}
-                        className={inputClass}
+                        className={dashboardInputClass}
                       />
                     </div>
                   </div>
@@ -5671,151 +5297,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
           )}
 
           {activeSection === "pending-approvals" && (
-            <div className="space-y-6">
-              {canAdmin ? (
-                <Card title="Pending Approvals">
-                  {pendingEntries.isLoading ? (
-                    <div className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Loading pending entries...</div>
-                  ) : pendingEntries.data && pendingEntries.data.length > 0 ? (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-semibold text-[var(--color-text)]">
-                          {pendingEntries.data.length} pending entr{pendingEntries.data.length === 1 ? "y" : "ies"} awaiting approval
-                        </p>
-                      </div>
-                      <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2">
-                        {Object.entries(
-                          pendingEntries.data.reduce<Record<string, typeof pendingEntries.data>>((groups, entry) => {
-                            const dateKey = entry.entryDate.split("T")[0];
-                            if (!groups[dateKey]) groups[dateKey] = [];
-                            groups[dateKey].push(entry);
-                            return groups;
-                          }, {}),
-                        )
-                          .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
-                          .map(([dateKey, entriesForDate]) => (
-                            <div key={dateKey} className="rounded-xl border border-[var(--color-surface-strong)] bg-white p-3 space-y-3">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <p className="text-sm font-bold text-[var(--color-text)]">
-                                    {formatDate(new Date(dateKey))}
-                                  </p>
-                                  <p className="text-xs text-[var(--color-text-soft)]">
-                                    {entriesForDate.length} entr{entriesForDate.length === 1 ? "y" : "ies"} on this day
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (!entriesForDate[0]) return;
-                                      const entryDateIso = entriesForDate[0].entryDate.split("T")[0];
-                                      approveEntriesByDate.mutate(entryDateIso, {
-                                        onSuccess: (result) => {
-                                          const invalid = result.invalidCount ?? 0;
-                                          const suffix = invalid > 0 ? ` (${invalid} skipped)` : "";
-                                          toast.success(`Approved ${result.approvedCount} entr${result.approvedCount === 1 ? "y" : "ies"} for ${formatDate(new Date(entryDateIso))}${suffix}`);
-                                        },
-                                        onError: (error) => {
-                                          toast.error(error instanceof Error ? error.message : "Failed to approve entries for this day");
-                                        },
-                                      });
-                                    }}
-                                    disabled={approveEntriesByDate.isPending || rejectEntriesByDate.isPending}
-                                    className="rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-4 py-2 text-xs font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    {approveEntriesByDate.isPending ? "Approving..." : "Approve all"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (!entriesForDate[0]) return;
-                                      const entryDateIso = entriesForDate[0].entryDate.split("T")[0];
-                                      rejectEntriesByDate.mutate(entryDateIso, {
-                                        onSuccess: (result) => {
-                                          toast.success(`Rejected ${result.rejectedCount} entr${result.rejectedCount === 1 ? "y" : "ies"} for ${formatDate(new Date(entryDateIso))}`);
-                                        },
-                                        onError: (error) => {
-                                          toast.error(error instanceof Error ? error.message : "Failed to reject entries for this day");
-                                        },
-                                      });
-                                    }}
-                                    disabled={approveEntriesByDate.isPending || rejectEntriesByDate.isPending}
-                                    className="rounded-lg border-2 border-red-500 bg-white px-4 py-2 text-xs font-bold text-red-500 shadow-lg transition-all hover:scale-[1.02] hover:bg-red-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                                  >
-                                    {rejectEntriesByDate.isPending ? "Rejecting..." : "Reject all"}
-                                  </button>
-                                </div>
-                              </div>
-                              <div className="space-y-3">
-                                {entriesForDate.map((entry) => (
-                                  <PendingEntryCard
-                                    key={entry.id}
-                                    entry={entry}
-                                    onApprove={(id) => {
-                                      approveEntry.mutate(id, {
-                                        onSuccess: () => {
-                                          toast.success("Entry approved successfully");
-                                        },
-                                        onError: (error) => {
-                                          toast.error(error instanceof Error ? error.message : "Failed to approve entry");
-                                        },
-                                      });
-                                    }}
-                                    onReject={(id, reason) => {
-                                      rejectEntry.mutate({ entryId: id, reason }, {
-                                        onSuccess: () => {
-                                          toast.success("Entry rejected");
-                                        },
-                                        onError: (error) => {
-                                          toast.error(error instanceof Error ? error.message : "Failed to reject entry");
-                                        },
-                                      });
-                                    }}
-                                    onUpdate={(id, entryDate, hoursRun) => {
-                                      updateEntry.mutate({ entryId: id, entryDate, hoursRun }, {
-                                        onSuccess: () => {
-                                          toast.success("Entry updated successfully");
-                                        },
-                                        onError: (error) => {
-                                          toast.error(error instanceof Error ? error.message : "Failed to update entry");
-                                        },
-                                      });
-                                    }}
-                                    onDelete={(id) => {
-                                      deleteEntry.mutate(id, {
-                                        onSuccess: () => {
-                                          toast.success("Entry deleted successfully");
-                                        },
-                                        onError: (error) => {
-                                          toast.error(error instanceof Error ? error.message : "Failed to delete entry");
-                                        },
-                                      });
-                                    }}
-                                    isApproving={approveEntry.isPending}
-                                    isRejecting={rejectEntry.isPending}
-                                    isUpdating={updateEntry.isPending}
-                                    isDeleting={deleteEntry.isPending}
-                                  />
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="py-8 text-center">
-                      <p className="text-sm font-medium text-[var(--color-text-soft)]">No pending entries</p>
-                      <p className="text-xs text-[var(--color-text-soft)] mt-1">All entries have been reviewed</p>
-                    </div>
-                  )}
-                </Card>
-              ) : (
-                <Card title="Pending Approvals">
-                  <p className="py-8 text-center text-sm font-medium text-[var(--color-text-soft)]">Admin access required</p>
-                </Card>
-              )}
-            </div>
+            <PendingApprovalsSectionLazy
+              canAdmin={canAdmin}
+              pendingEntries={pendingEntries}
+              approveEntriesByDate={approveEntriesByDate}
+              rejectEntriesByDate={rejectEntriesByDate}
+              approveEntry={approveEntry}
+              rejectEntry={rejectEntry}
+              updateEntry={updateEntry}
+              deleteEntry={deleteEntry}
+            />
           )}
 
           {issueModalCheck && (
@@ -8026,19 +7517,19 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                     <form className="space-y-4" onSubmit={onCreateUser}>
                       <div>
                         <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Full Name</label>
-                        <input required value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className={inputClass} />
+                        <input required value={newUserName} onChange={(e) => setNewUserName(e.target.value)} className={dashboardInputClass} />
                       </div>
                       <div>
                         <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Email</label>
-                        <input required type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className={inputClass} />
+                        <input required type="email" value={newUserEmail} onChange={(e) => setNewUserEmail(e.target.value)} className={dashboardInputClass} />
                       </div>
                       <div>
                         <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Password</label>
-                        <input required type="password" minLength={8} value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className={inputClass} />
+                        <input required type="password" minLength={8} value={newUserPassword} onChange={(e) => setNewUserPassword(e.target.value)} className={dashboardInputClass} />
                       </div>
                       <div>
                         <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Role</label>
-                        <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value as UserRole)} className={inputClass}>
+                        <select value={newUserRole} onChange={(e) => setNewUserRole(e.target.value as UserRole)} className={dashboardInputClass}>
                           <option value="USER">USER</option>
                           <option value="ADMIN">ADMIN</option>
                           <option value="SUPERADMIN">SUPERADMIN</option>
@@ -8109,15 +7600,15 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         <h3 className="text-lg font-bold text-[var(--color-text)]">Edit User</h3>
                         <div>
                           <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Full Name</label>
-                          <input required value={editUserName} onChange={(e) => setEditUserName(e.target.value)} className={inputClass} />
+                          <input required value={editUserName} onChange={(e) => setEditUserName(e.target.value)} className={dashboardInputClass} />
                         </div>
                         <div>
                           <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Email</label>
-                          <input required type="email" value={editUserEmail} onChange={(e) => setEditUserEmail(e.target.value)} className={inputClass} />
+                          <input required type="email" value={editUserEmail} onChange={(e) => setEditUserEmail(e.target.value)} className={dashboardInputClass} />
                         </div>
                         <div>
                           <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Role</label>
-                          <select value={editUserRole} onChange={(e) => setEditUserRole(e.target.value as UserRole)} className={inputClass}>
+                          <select value={editUserRole} onChange={(e) => setEditUserRole(e.target.value as UserRole)} className={dashboardInputClass}>
                             <option value="USER">USER</option>
                             <option value="ADMIN">ADMIN</option>
                             <option value="SUPERADMIN">SUPERADMIN</option>
@@ -8125,7 +7616,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                         </div>
                         <div>
                           <label className="mb-2 block text-sm font-bold text-[var(--color-text)]">Password (leave blank to keep unchanged)</label>
-                          <input type="password" minLength={8} value={editUserPassword} onChange={(e) => setEditUserPassword(e.target.value)} className={inputClass} />
+                          <input type="password" minLength={8} value={editUserPassword} onChange={(e) => setEditUserPassword(e.target.value)} className={dashboardInputClass} />
                         </div>
                         <label className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text)]">
                           <input
@@ -8178,7 +7669,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           setPermissionUserId(e.target.value);
                           loadPermissionMap(e.target.value);
                         }}
-                        className={inputClass}
+                        className={dashboardInputClass}
                       >
                         <option value="">Select user</option>
                         {(users.data ?? []).map((u) => (
@@ -8294,7 +7785,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           required
                           value={editingTechnicianId ? editTechnicianName : newTechnicianName}
                           onChange={(e) => (editingTechnicianId ? setEditTechnicianName(e.target.value) : setNewTechnicianName(e.target.value))}
-                          className={inputClass}
+                          className={dashboardInputClass}
                         />
                       </div>
                       <div>
@@ -8303,7 +7794,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           required
                           value={editingTechnicianId ? editTechnicianStaffId : newTechnicianStaffId}
                           onChange={(e) => (editingTechnicianId ? setEditTechnicianStaffId(e.target.value) : setNewTechnicianStaffId(e.target.value))}
-                          className={inputClass}
+                          className={dashboardInputClass}
                         />
                       </div>
                       <div>
@@ -8312,7 +7803,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           required
                           value={editingTechnicianId ? editTechnicianDesignation : newTechnicianDesignation}
                           onChange={(e) => (editingTechnicianId ? setEditTechnicianDesignation(e.target.value) : setNewTechnicianDesignation(e.target.value))}
-                          className={inputClass}
+                          className={dashboardInputClass}
                         />
                       </div>
                       {editingTechnicianId && (
@@ -8746,7 +8237,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               type="text"
                               value={emailSmtpHost}
                               onChange={(e) => setEmailSmtpHost(e.target.value)}
-                              className={inputClass}
+                              className={dashboardInputClass}
                               placeholder="smtp.example.com"
                             />
                           </div>
@@ -8758,7 +8249,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               max={65535}
                               value={emailSmtpPort}
                               onChange={(e) => setEmailSmtpPort(e.target.value)}
-                              className={inputClass}
+                              className={dashboardInputClass}
                               placeholder="587"
                             />
                           </div>
@@ -8768,7 +8259,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               type="text"
                               value={emailSmtpUsername}
                               onChange={(e) => setEmailSmtpUsername(e.target.value)}
-                              className={inputClass}
+                              className={dashboardInputClass}
                             />
                           </div>
                           <div>
@@ -8777,7 +8268,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                               type="password"
                               value={emailSmtpPassword}
                               onChange={(e) => setEmailSmtpPassword(e.target.value)}
-                              className={inputClass}
+                              className={dashboardInputClass}
                             />
                           </div>
                         </div>
@@ -8788,7 +8279,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             type="text"
                             value={emailRecipients}
                             onChange={(e) => setEmailRecipients(e.target.value)}
-                            className={inputClass}
+                            className={dashboardInputClass}
                             placeholder="user1@example.com, user2@example.com"
                           />
                           <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">Use commas or semicolons to separate multiple addresses.</p>
@@ -8800,7 +8291,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             type="text"
                             value={emailCcs}
                             onChange={(e) => setEmailCcs(e.target.value)}
-                            className={inputClass}
+                            className={dashboardInputClass}
                             placeholder="cc1@example.com, cc2@example.com"
                           />
                         </div>
@@ -8811,7 +8302,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             type="text"
                             value={emailTemplateSubject}
                             onChange={(e) => setEmailTemplateSubject(e.target.value)}
-                            className={inputClass}
+                            className={dashboardInputClass}
                             placeholder="Maintenance Check {{type}} for {{equipmentNumber}} (Check {{checkCode}})"
                           />
                           <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">
@@ -8825,7 +8316,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                             rows={6}
                             value={emailTemplateBody}
                             onChange={(e) => setEmailTemplateBody(e.target.value)}
-                            className={`${inputClass} min-h-[140px]`}
+                            className={`${dashboardInputClass} min-h-[140px]`}
                             placeholder={`Dear Team,
 
 A maintenance check has been {{type}}.
@@ -8849,7 +8340,7 @@ Status: {{status}}`}
                             max={365}
                             value={emailReminderDaysBefore}
                             onChange={(e) => setEmailReminderDaysBefore(e.target.value)}
-                            className={inputClass}
+                            className={dashboardInputClass}
                             placeholder="3"
                           />
                           <p className="mt-1 text-[10px] text-[var(--color-text-soft)]">
@@ -9037,18 +8528,6 @@ Status: {{status}}`}
           )}
         </main>
       </div>
-    </div>
-  );
-}
-
-const inputClass =
-  "h-12 w-full rounded-xl border-2 border-[var(--color-surface-strong)] bg-white px-4 text-sm font-medium outline-none transition-all focus:border-[var(--color-primary)] focus:ring-4 focus:ring-[var(--color-primary)]/20 shadow-sm";
-
-function Card({ title, className = "", children }: { title: string; className?: string; children: React.ReactNode }) {
-  return (
-    <div className={`rounded-2xl border-2 border-[var(--color-surface-strong)] bg-gradient-to-br from-white to-[var(--color-surface)] p-6 shadow-xl ${className}`}>
-      <h2 className="mb-5 text-xl font-bold bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-dark)] bg-clip-text text-transparent">{title}</h2>
-      {children}
     </div>
   );
 }

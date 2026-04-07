@@ -1,8 +1,35 @@
-import { EntryStatus } from "@prisma/client";
+import { EntryStatus, Prisma } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
 import { ok } from "@/lib/api/response";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
+
+type ApprovedEntryRow = {
+  entryDate: Date;
+  hoursRun: number;
+};
+
+function findPreviousApprovedEntry(
+  approvedRows: ApprovedEntryRow[],
+  currentEntryDate: Date,
+): ApprovedEntryRow | null {
+  let left = 0;
+  let right = approvedRows.length - 1;
+  let resultIndex = -1;
+
+  while (left <= right) {
+    const mid = Math.floor((left + right) / 2);
+    const midMs = approvedRows[mid]!.entryDate.getTime();
+    if (midMs < currentEntryDate.getTime()) {
+      resultIndex = mid;
+      left = mid + 1;
+    } else {
+      right = mid - 1;
+    }
+  }
+
+  return resultIndex >= 0 ? approvedRows[resultIndex]! : null;
+}
 
 export async function GET(request: Request) {
   const access = await requireAccess({
@@ -21,7 +48,7 @@ export async function GET(request: Request) {
   const dateFrom = searchParams.get("dateFrom");
   const dateTo = searchParams.get("dateTo");
 
-  const where: any = {};
+  const where: Prisma.DailyEntryWhereInput = {};
 
   if (status && status !== "ALL") {
     where.status = status as EntryStatus;
@@ -99,12 +126,16 @@ export async function GET(request: Request) {
   }
 
   const equipmentIds = [...new Set(entries.map((e) => e.equipmentId))];
+  const maxEntryDate = new Date(
+    Math.max(...entries.map((entry) => entry.entryDate.getTime())),
+  );
 
   const [allApprovedEntries, approvedCounts] = await Promise.all([
     prisma.dailyEntry.findMany({
       where: {
         equipmentId: { in: equipmentIds },
         status: EntryStatus.APPROVED,
+        entryDate: { lt: maxEntryDate },
       },
       select: {
         equipmentId: true,
@@ -113,7 +144,7 @@ export async function GET(request: Request) {
       },
       orderBy: [
         { equipmentId: "asc" },
-        { entryDate: "desc" },
+        { entryDate: "asc" },
       ],
     }),
     prisma.dailyEntry.groupBy({
@@ -126,16 +157,11 @@ export async function GET(request: Request) {
     }),
   ]);
 
-  const previousMap = new Map<string, Map<string, { entryDate: Date; hoursRun: number }>>();
+  const approvedByEquipment = new Map<string, ApprovedEntryRow[]>();
   for (const entry of allApprovedEntries) {
-    if (!previousMap.has(entry.equipmentId)) {
-      previousMap.set(entry.equipmentId, new Map());
-    }
-    const dateKey = entry.entryDate.toISOString().split("T")[0];
-    const map = previousMap.get(entry.equipmentId)!;
-    if (!map.has(dateKey) || entry.entryDate > map.get(dateKey)!.entryDate) {
-      map.set(dateKey, { entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) });
-    }
+    const rows = approvedByEquipment.get(entry.equipmentId) ?? [];
+    rows.push({ entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) });
+    approvedByEquipment.set(entry.equipmentId, rows);
   }
 
   const approvedCountMap = new Map(
@@ -143,19 +169,10 @@ export async function GET(request: Request) {
   );
 
   const entriesWithPrevious = entries.map((entry) => {
-    const entryDateStr = entry.entryDate.toISOString().split("T")[0];
-    const equipmentPrevious = previousMap.get(entry.equipmentId);
-    
-    let previousEntry: { entryDate: Date; hoursRun: number } | null = null;
-    if (equipmentPrevious) {
-      for (const [dateKey, value] of equipmentPrevious.entries()) {
-        if (value.entryDate < entry.entryDate) {
-          if (!previousEntry || value.entryDate > previousEntry.entryDate) {
-            previousEntry = value;
-          }
-        }
-      }
-    }
+    const previousEntry = findPreviousApprovedEntry(
+      approvedByEquipment.get(entry.equipmentId) ?? [],
+      entry.entryDate,
+    );
 
     const hasAnyApprovedEntries = approvedCountMap.get(entry.equipmentId) ?? false;
     const previousHours = previousEntry
