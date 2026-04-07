@@ -70,10 +70,11 @@ export async function recalculateEquipmentUsageBatch(equipmentIds: string[]) {
       });
     }
 
-    const maxApprovedHours = maxMap.has(eq.id)
-      ? maxMap.get(eq.id)!
-      : Number(eq.currentHours);
-    const currentHours = Math.max(Number(eq.currentHours), maxApprovedHours);
+    const maxApprovedHours = maxMap.has(eq.id) ? maxMap.get(eq.id)! : null;
+    // When any approved entries exist, cumulative meter comes from data (max hoursRun).
+    // Do not Math.max with stored equipment.currentHours — that blocks corrections when a max entry is edited down.
+    const currentHours =
+      maxApprovedHours != null ? maxApprovedHours : Number(eq.currentHours);
 
     updatePromises.push(
       prisma.equipment.update({
@@ -143,10 +144,10 @@ export async function recalculateEquipmentUsage(equipmentId: string) {
       hoursRun: true,
     },
   });
-  const maxApprovedHours = maxApproved._max.hoursRun != null
-    ? Number(maxApproved._max.hoursRun)
-    : Number(equipment.currentHours);
-  const currentHours = Math.max(Number(equipment.currentHours), maxApprovedHours);
+  const maxApprovedHours =
+    maxApproved._max.hoursRun != null ? Number(maxApproved._max.hoursRun) : null;
+  const currentHours =
+    maxApprovedHours != null ? maxApprovedHours : Number(equipment.currentHours);
 
   const updated = await prisma.equipment.update({
     where: { id: equipmentId },
