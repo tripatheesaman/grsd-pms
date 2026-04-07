@@ -1,6 +1,7 @@
 import { CheckStatus } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
 import { ok } from "@/lib/api/response";
+import { CHECK_STATUS_SKIPPED } from "@/lib/prisma-check-status";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { determineStatus } from "@/lib/planning/engine";
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
           CheckStatus.ISSUED,
           CheckStatus.OVERDUE,
           CheckStatus.COMPLETED,
+          CHECK_STATUS_SKIPPED,
         ],
       },
       dueDate: {
@@ -62,11 +64,12 @@ export async function GET(request: Request) {
           currentHours: true,
           usageUnit: true,
           checkSheets: {
-            where: { status: CheckStatus.COMPLETED },
-            orderBy: [{ completedAt: "desc" }, { dueDate: "desc" }],
+            where: { status: { in: [CheckStatus.COMPLETED, CHECK_STATUS_SKIPPED] } },
+            orderBy: [{ completedAt: "desc" }, { skippedAt: "desc" }, { dueDate: "desc" }],
             take: 1,
             select: {
               completedAt: true,
+              skippedAt: true,
               dueDate: true,
             },
           },
@@ -92,9 +95,19 @@ export async function GET(request: Request) {
 
   const mapped = checkSheets
     .map((sheet) => {
-        const latestCompleted = sheet.equipment.checkSheets[0] ?? null;
-        const latestCompletedAt = latestCompleted?.completedAt ?? latestCompleted?.dueDate ?? null;
-        if (latestCompletedAt && sheet.dueDate <= latestCompletedAt) {
+        const latestClosed = sheet.equipment.checkSheets[0] ?? null;
+        const latestClosedAt =
+          latestClosed != null
+            ? latestClosed.completedAt ??
+              latestClosed.skippedAt ??
+              latestClosed.dueDate
+            : null;
+        if (
+          latestClosedAt &&
+          sheet.dueDate <= latestClosedAt &&
+          sheet.status !== CheckStatus.COMPLETED &&
+          sheet.status !== CHECK_STATUS_SKIPPED
+        ) {
           return null;
         }
 
@@ -113,9 +126,11 @@ export async function GET(request: Request) {
         const effectiveStatus =
           sheet.status === CheckStatus.COMPLETED
             ? CheckStatus.COMPLETED
-            : isIssued
-              ? CheckStatus.ISSUED
-              : recalculatedStatus;
+            : sheet.status === CHECK_STATUS_SKIPPED
+              ? CHECK_STATUS_SKIPPED
+              : isIssued
+                ? CheckStatus.ISSUED
+                : recalculatedStatus;
 
         const activeGrounding = sheet.equipment.groundingPeriods[0] ?? null;
 
@@ -143,11 +158,22 @@ export async function GET(request: Request) {
 
   const filtered = mapped.filter((sheet) => {
     if (!sheet) return false;
-    if (openOnly && (sheet.status === CheckStatus.ISSUED || sheet.status === CheckStatus.COMPLETED)) {
+    if (
+      openOnly &&
+      (sheet.status === CheckStatus.ISSUED ||
+        sheet.status === CheckStatus.COMPLETED ||
+        sheet.status === CHECK_STATUS_SKIPPED)
+    ) {
       return false;
     }
-    if (statusFilter && statusFilter !== "ALL" && sheet.status !== statusFilter) {
-      return false;
+    if (statusFilter && statusFilter !== "ALL") {
+      if (statusFilter === CheckStatus.COMPLETED) {
+        if (sheet.status !== CheckStatus.COMPLETED && sheet.status !== CHECK_STATUS_SKIPPED) {
+          return false;
+        }
+      } else if (sheet.status !== statusFilter) {
+        return false;
+      }
     }
     if (equipmentSearch) {
       const eqNumber = sheet.equipmentNumber.toLowerCase();

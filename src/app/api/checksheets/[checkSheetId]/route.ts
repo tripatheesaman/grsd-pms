@@ -3,13 +3,14 @@ import { z } from "zod";
 import { parseBody, requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
+import { CHECK_STATUS_SKIPPED } from "@/lib/prisma-check-status";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { sendCheckEmail } from "@/lib/email";
 
 const updateSchema = z.object({
-  action: z.enum(["issue", "complete"]),
+  action: z.enum(["issue", "complete", "skip"]),
   date: z.string().datetime(),
   completedHours: z.number().nonnegative().optional(),
   remarks: z.string().max(1000).optional(),
@@ -29,9 +30,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   const access = await requireAccess({
     minRole: "USER",
     requiredPermission:
-      parsed.data.action === "issue"
-        ? permissionKeys.checksheetIssue
-        : permissionKeys.checksheetComplete,
+      parsed.data.action === "issue" ? permissionKeys.checksheetIssue : permissionKeys.checksheetComplete,
   });
   if ("error" in access) {
     return access.error;
@@ -51,8 +50,30 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   const valueDate = new Date(parsed.data.date);
-  
-  if (parsed.data.action === "complete") {
+
+  if (
+    parsed.data.action === "skip" &&
+    (existing.status === CheckStatus.COMPLETED || existing.status === CHECK_STATUS_SKIPPED)
+  ) {
+    return fail("BAD_REQUEST", "Check is already closed", 400);
+  }
+
+  if (parsed.data.action === "skip") {
+    await prisma.$transaction(async (tx) => {
+      await tx.checkSheetTechnician.deleteMany({ where: { checkSheetId } });
+      await tx.checkSheet.update({
+        where: { id: checkSheetId },
+        data: {
+          status: CHECK_STATUS_SKIPPED,
+          skippedAt: valueDate,
+          issuedAt: null,
+          completedAt: null,
+          completedHours: null,
+          remarks: parsed.data.remarks ?? null,
+        },
+      });
+    });
+  } else if (parsed.data.action === "complete") {
     await prisma.$transaction(async (tx) => {
       await tx.checkSheet.update({
         where: {
@@ -63,6 +84,7 @@ export async function PATCH(request: Request, context: RouteContext) {
           completedHours: parsed.data.completedHours !== undefined ? parsed.data.completedHours : null,
           remarks: parsed.data.remarks || null,
           status: CheckStatus.COMPLETED,
+          skippedAt: null,
         },
       });
 
@@ -79,7 +101,7 @@ export async function PATCH(request: Request, context: RouteContext) {
         });
       }
     });
-  } else {
+  } else if (parsed.data.action === "issue") {
     const updated = await prisma.checkSheet.update({
       where: {
         id: checkSheetId,
@@ -87,6 +109,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       data: {
         issuedAt: valueDate,
         status: CheckStatus.ISSUED,
+        skippedAt: null,
       },
     });
 
@@ -116,5 +139,11 @@ export async function PATCH(request: Request, context: RouteContext) {
     request,
   }).catch(() => null);
 
-  return ok({ id: checkSheetId, status: parsed.data.action === "issue" ? "ISSUED" : "COMPLETED" });
+  const outStatus =
+    parsed.data.action === "issue"
+      ? "ISSUED"
+      : parsed.data.action === "skip"
+        ? "SKIPPED"
+        : "COMPLETED";
+  return ok({ id: checkSheetId, status: outStatus });
 }

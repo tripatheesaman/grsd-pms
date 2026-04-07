@@ -1,4 +1,5 @@
 import { AlertLevel, CheckStatus, EntryStatus, TriggerType } from "@prisma/client";
+import { CHECK_STATUS_SKIPPED } from "@/lib/prisma-check-status";
 import { prisma } from "@/lib/prisma";
 import {
   buildYearlyPlan,
@@ -23,24 +24,24 @@ function toAlertLevel(status: CheckStatus) {
 
 const ALERT_START_DATE = new Date("2026-04-01T00:00:00.000Z");
 
+function closedCheckTimestamp(sheet: {
+  completedAt: Date | null;
+  skippedAt: Date | null;
+  dueDate: Date;
+}) {
+  return Math.max(
+    sheet.completedAt?.getTime() ?? 0,
+    sheet.skippedAt?.getTime() ?? 0,
+    sheet.dueDate.getTime(),
+  );
+}
+
 export async function syncEquipmentPlan(equipmentId: string, year: number) {
   const equipment = await prisma.equipment.findUnique({
     where: { id: equipmentId },
     include: {
       checkRules: {
         where: { isActive: true },
-      },
-      checkSheets: {
-        where: { status: CheckStatus.COMPLETED },
-        orderBy: [{ completedAt: "desc" }, { dueHours: "desc" }],
-        take: 1,
-        select: {
-          completedAt: true,
-          dueDate: true,
-          dueHours: true,
-          completedHours: true,
-          checkCode: true,
-        },
       },
     },
   });
@@ -55,27 +56,65 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
       status: EntryStatus.APPROVED,
     },
     select: {
+      id: true,
       hoursRun: true,
       entryDate: true,
     },
-    orderBy: {
-      entryDate: "desc",
-    },
+    orderBy: [{ entryDate: "desc" }, { id: "desc" }],
     take: 120,
   });
   const allEntries = [...allEntriesRaw].sort((a, b) => a.entryDate.getTime() - b.entryDate.getTime());
 
-  const lastCompletedCheck = equipment.checkSheets[0];
-  const lastCompletedAt = lastCompletedCheck?.completedAt ?? lastCompletedCheck?.dueDate ?? null;
-  const lastCompletedHours = lastCompletedCheck ? Number(lastCompletedCheck.completedHours ?? lastCompletedCheck.dueHours) : null;
+  const lastEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1]! : null;
+
+  const closedRows = await prisma.checkSheet.findMany({
+    where: {
+      equipmentId,
+      status: { in: [CheckStatus.COMPLETED, CHECK_STATUS_SKIPPED] },
+    },
+    select: {
+      checkCode: true,
+      completedAt: true,
+      skippedAt: true,
+      dueDate: true,
+      dueHours: true,
+      completedHours: true,
+    },
+    take: 80,
+  });
+  const lastClosedCheck =
+    closedRows.length === 0
+      ? null
+      : [...closedRows].sort((a, b) => closedCheckTimestamp(b) - closedCheckTimestamp(a))[0]!;
 
   const baselineDate = equipment.planningBaselineCheckDate ?? null;
   const baselineHours = equipment.planningBaselineHours != null ? Number(equipment.planningBaselineHours) : null;
   const baselineCheckCode = equipment.planningBaselineCheckCode ?? null;
 
-  let anchorDate: Date;
+  const overrideRaw = equipment.planningEffectiveHoursOverride;
+  const hasOverride = overrideRaw != null && Number.isFinite(Number(overrideRaw));
+
+  /** Cumulative hours used as the planning origin (not snapped to the interval grid). */
   let startHours: number;
-  let hourOffset = 0;
+  if (hasOverride) {
+    startHours = Number(overrideRaw);
+  } else if (lastEntry) {
+    startHours = Number(lastEntry.hoursRun);
+  } else if (baselineHours != null) {
+    startHours = baselineHours;
+  } else {
+    startHours = Number(equipment.currentHours);
+  }
+
+  /** Calendar anchor for hour→date projection: always tied to the last known daily reading when present. */
+  let anchorDate: Date;
+  if (lastEntry) {
+    anchorDate = lastEntry.entryDate;
+  } else if (baselineDate && baselineHours != null) {
+    anchorDate = baselineDate;
+  } else {
+    anchorDate = equipment.commissionedAt ?? new Date();
+  }
 
   const recurringRules = equipment.checkRules.filter((r) => r.intervalHours > 0);
   const orderedCycleRules = [...recurringRules].sort(
@@ -83,7 +122,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
   );
   const baseInterval = orderedCycleRules.length > 0
     ? Math.min(...orderedCycleRules.map((r) => Number(r.intervalHours)).filter((v) => Number.isFinite(v) && v > 0))
-    : null;
+      : null;
   const ratios = baseInterval
     ? orderedCycleRules.map((r) => Number(r.intervalHours) / baseInterval)
     : [];
@@ -91,21 +130,6 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     !!baseInterval &&
     ratios.length > 0 &&
     ratios.every((v, idx) => Number.isFinite(v) && Math.abs(v - (idx + 1)) <= 1e-9);
-
-  const gcdInt = (a: number, b: number) => {
-    const x = Math.abs(Math.trunc(a));
-    const y = Math.abs(Math.trunc(b));
-    if (x === 0) return y;
-    if (y === 0) return x;
-    let m = x;
-    let n = y;
-    while (n !== 0) {
-      const t = n;
-      n = m % n;
-      m = t;
-    }
-    return m;
-  };
 
   const theoreticalCodeAtHours = (hours: number) => {
     if (!baseInterval || orderedCycleRules.length === 0) return null;
@@ -124,75 +148,17 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
       return Math.abs(n - Math.round(n)) <= 0.01;
     });
     if (eligible.length === 0) return null;
-    const chosen = eligible.sort((a, b) => Number(b.intervalHours) - Number(a.intervalHours) || a.code.localeCompare(b.code))[0];
+    const chosen = eligible.sort(
+      (a, b) => Number(b.intervalHours) - Number(a.intervalHours) || a.code.localeCompare(b.code),
+    )[0];
     return chosen?.code ?? null;
   };
 
-  const snapToNearestMilestone = (targetCode: string | null, targetHours: number) => {
-    const intervals = recurringRules.map((r) => Number(r.intervalHours)).filter((v) => Number.isFinite(v) && v > 0);
-    if (intervals.length === 0) return { idealHours: targetHours, offsetHours: 0, snappedCode: targetCode };
-    const step = baseInterval ?? (intervals.reduce((acc, v) => gcdInt(acc, v), intervals[0] ?? 1) || 1);
-    const maxInterval = Math.max(...intervals);
-
-    let span = Math.max(maxInterval * 4, 1000);
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const kMin = Math.floor((targetHours - span) / step);
-      const kMax = Math.ceil((targetHours + span) / step);
-      let bestAny: { hours: number; code: string; diff: number } | null = null;
-      let bestByCode: { hours: number; code: string; diff: number } | null = null;
-
-      for (let k = kMin; k <= kMax; k += 1) {
-        const milestone = k * step;
-        if (!Number.isFinite(milestone) || milestone < 0) continue;
-        const code = theoreticalCodeAtHours(milestone);
-        if (!code) continue;
-        const diff = Math.abs(milestone - targetHours);
-
-        if (!bestAny || diff < bestAny.diff) {
-          bestAny = { hours: milestone, code, diff };
-        }
-        if (targetCode && code === targetCode && (!bestByCode || diff < bestByCode.diff)) {
-          bestByCode = { hours: milestone, code, diff };
-        }
-      }
-
-      if (bestAny) {
-        const chosen =
-          bestByCode && bestByCode.diff <= bestAny.diff
-            ? bestByCode
-            : bestAny;
-        return {
-          idealHours: chosen.hours,
-          offsetHours: targetHours - chosen.hours,
-          snappedCode: chosen.code,
-        };
-      }
-
-      span *= 2;
-    }
-
-    return { idealHours: targetHours, offsetHours: 0, snappedCode: targetCode };
-  };
-
-  let snappedStartingCode: string | null = baselineCheckCode;
-
-  if (lastCompletedCheck && lastCompletedAt) {
-    anchorDate = lastCompletedAt;
-    const targetHours = lastCompletedHours ?? Number(equipment.currentHours);
-    const snap = snapToNearestMilestone(lastCompletedCheck.checkCode ?? null, targetHours);
-    startHours = snap.idealHours;
-    hourOffset = snap.offsetHours;
-    snappedStartingCode = snap.snappedCode ?? lastCompletedCheck.checkCode ?? null;
-  } else if (baselineDate && baselineHours != null) {
-    anchorDate = baselineDate;
-    startHours = baselineHours;
-    const snap = snapToNearestMilestone(baselineCheckCode, baselineHours);
-    snappedStartingCode = snap.snappedCode ?? baselineCheckCode;
-  } else {
-    anchorDate = equipment.commissionedAt ?? new Date();
-    startHours = Number(equipment.currentHours);
-    snappedStartingCode = null;
-  }
+  let snappedStartingCode: string | null =
+    lastClosedCheck?.checkCode ??
+    baselineCheckCode ??
+    theoreticalCodeAtHours(startHours) ??
+    null;
 
   const historicalDailyHours = deriveDailyRatesFromCumulativeReadings(
     allEntries.map((entry) => ({
@@ -225,15 +191,8 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
   const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
   const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
 
-  plans = plans.map((p) => ({
-    ...p,
-    dueHours: p.dueHours + hourOffset,
-  }));
-
   plans = plans.filter((p) => p.dueDate >= yearStart && p.dueDate <= yearEnd);
-  if (lastCompletedAt) {
-    plans = plans.filter((p) => p.dueDate > lastCompletedAt);
-  }
+  plans = plans.filter((p) => p.dueHours > startHours);
 
   const now = new Date();
   const planKeys = plans.map((p) => ({
@@ -260,7 +219,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
   });
 
   const existingMap = new Map(
-    existingSheets.map((s) => [`${s.equipmentId}:${s.checkCode}:${s.dueHours}`, s])
+    existingSheets.map((s) => [`${s.equipmentId}:${s.checkCode}:${s.dueHours}`, s]),
   );
 
   const toCreate: Array<{
@@ -306,7 +265,11 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
         triggerType: plan.triggerType,
         status,
       });
-    } else if (existing.status === CheckStatus.COMPLETED || existing.status === CheckStatus.ISSUED) {
+    } else if (
+      existing.status === CheckStatus.COMPLETED ||
+      existing.status === CheckStatus.ISSUED ||
+      existing.status === CHECK_STATUS_SKIPPED
+    ) {
       toUpdatePreserve.push({
         id: existing.id,
         checkRuleId: plan.checkRuleId,
@@ -342,8 +305,8 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
             dueDate: item.dueDate,
             triggerType: item.triggerType,
           },
-        })
-      )
+        }),
+      ),
     );
   }
 
@@ -359,9 +322,10 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
             status: item.status,
             completedAt: null,
             completedHours: null,
+            skippedAt: null,
           },
-        })
-      )
+        }),
+      ),
     );
   }
 
@@ -448,8 +412,8 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
         prisma.checkSheet.update({
           where: { id: item.id },
           data: { status: item.status },
-        })
-      )
+        }),
+      ),
     );
   }
 

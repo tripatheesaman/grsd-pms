@@ -31,7 +31,7 @@ export type CheckSheetItem = {
   checkCode: string;
   dueDate: string;
   dueHours: number;
-  status: "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE";
+  status: "PREDICTED" | "ISSUE_REQUIRED" | "NEAR_DUE" | "ISSUED" | "COMPLETED" | "OVERDUE" | "SKIPPED";
   triggerType: "HOURS" | "CALENDAR";
 };
 
@@ -221,6 +221,7 @@ export type CheckSheetManagementItem = {
   status: string;
   issuedAt: string | null;
   completedAt: string | null;
+  skippedAt: string | null;
   pdfFilePath: string | null;
   completedHours: number | null;
 };
@@ -570,7 +571,14 @@ export function useCreateEntriesBulk() {
 export function useUpdateCheckSheet() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { id: string; action: "issue" | "complete"; date: string; completedHours?: number; remarks?: string; technicianIds?: string[] }) =>
+    mutationFn: (payload: {
+      id: string;
+      action: "issue" | "complete" | "skip";
+      date: string;
+      completedHours?: number;
+      remarks?: string;
+      technicianIds?: string[];
+    }) =>
       apiPatch<{ id: string; status: string }>(`/api/checksheets/${payload.id}`, {
         action: payload.action,
         date: payload.date,
@@ -588,6 +596,7 @@ export function useUpdateCheckSheet() {
       queryClient.invalidateQueries({ queryKey: ["checksheets"] });
       queryClient.invalidateQueries({ queryKey: ["alerts"] });
       queryClient.invalidateQueries({ queryKey: ["equipment"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment", "plan"] });
     },
   });
 }
@@ -681,6 +690,8 @@ export type EquipmentDetail = {
   previousCheckCode: string | null;
   previousCheckDate: string | null;
   previousCheckHours: number | null;
+  planningEffectiveHoursOverride: number | null;
+  planningEffectiveHoursNote: string | null;
   checkRules: Array<{
     id: string;
     code: string;
@@ -838,6 +849,8 @@ export function useUpdateEquipment() {
       previousCheckCode?: string | null;
       previousCheckDate?: string | null;
       previousCheckHours?: number | null;
+      planningEffectiveHoursOverride?: number | null;
+      planningEffectiveHoursNote?: string | null;
     }) =>
       apiPatch<{ id: string; equipmentNumber: string; displayName: string }>(
         `/api/equipment/${payload.equipmentId}`,
@@ -853,11 +866,15 @@ export function useUpdateEquipment() {
           previousCheckCode: payload.previousCheckCode,
           previousCheckDate: payload.previousCheckDate,
           previousCheckHours: payload.previousCheckHours,
+          planningEffectiveHoursOverride: payload.planningEffectiveHoursOverride,
+          planningEffectiveHoursNote: payload.planningEffectiveHoursNote,
         }
       ),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["equipment"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment", "detail", variables.equipmentId] });
+      queryClient.invalidateQueries({ queryKey: ["equipment", "plan", variables.equipmentId] });
     },
   });
 }

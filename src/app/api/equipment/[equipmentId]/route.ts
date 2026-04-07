@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 import { ensureImpliedCompletedChecks } from "@/lib/planning/baseline-completions";
 import { determineStatus } from "@/lib/planning/engine";
+import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { getSystemThresholds } from "@/lib/planning/thresholds";
 
 import { UsageUnit } from "@prisma/client";
@@ -22,6 +23,8 @@ const updateEquipmentSchema = z.object({
   previousCheckCode: z.string().regex(/^[A-Z]$/).optional().nullable(),
   previousCheckDate: z.string().optional().nullable(),
   previousCheckHours: z.number().nonnegative().optional().nullable(),
+  planningEffectiveHoursOverride: z.number().nonnegative().nullable().optional(),
+  planningEffectiveHoursNote: z.string().max(500).nullable().optional(),
 });
 
 type RouteContext = {
@@ -60,23 +63,35 @@ export async function GET(_: Request, context: RouteContext) {
     return fail("NOT_FOUND", "Equipment not found", 404);
   }
 
-  const latestCompleted = (equipment.checkSheets ?? [])
-    .filter((sheet: any) => sheet.status === "COMPLETED")
+  const latestClosed = (equipment.checkSheets ?? [])
+    .filter((sheet: any) => sheet.status === "COMPLETED" || sheet.status === "SKIPPED")
     .sort((a: any, b: any) => {
-      const aTime = new Date(a.completedAt ?? a.dueDate).getTime();
-      const bTime = new Date(b.completedAt ?? b.dueDate).getTime();
+      const aTime = new Date(a.completedAt ?? a.skippedAt ?? a.dueDate).getTime();
+      const bTime = new Date(b.completedAt ?? b.skippedAt ?? b.dueDate).getTime();
       if (aTime !== bTime) return bTime - aTime;
       return Number(b.completedHours ?? b.dueHours ?? 0) - Number(a.completedHours ?? a.dueHours ?? 0);
     })[0] ?? null;
 
-  const latestCompletedAt = latestCompleted ? new Date(latestCompleted.completedAt ?? latestCompleted.dueDate) : null;
-  const latestCompletedHours = latestCompleted ? Number(latestCompleted.completedHours ?? latestCompleted.dueHours ?? 0) : null;
+  const latestClosedAt = latestClosed
+    ? new Date(latestClosed.completedAt ?? latestClosed.skippedAt ?? latestClosed.dueDate)
+    : null;
+  const latestClosedHours = latestClosed
+    ? Number(latestClosed.completedHours ?? latestClosed.dueHours ?? 0)
+    : null;
   const visibleSheets = (equipment.checkSheets ?? []).filter((sheet: any) => {
-    if (sheet.status !== "COMPLETED") return true;
-    if (!latestCompletedAt || latestCompletedHours == null || !sheet.completedAt) return true;
-    const sameCompletionDay = new Date(sheet.completedAt).getTime() === latestCompletedAt.getTime();
-    if (!sameCompletionDay) return true;
-    return Number(sheet.dueHours) >= latestCompletedHours;
+    if (sheet.status !== "COMPLETED" && sheet.status !== "SKIPPED") return true;
+    if (!latestClosedAt || latestClosedHours == null) return true;
+    const closedStamp =
+      sheet.status === "SKIPPED"
+        ? sheet.skippedAt
+          ? new Date(sheet.skippedAt).getTime()
+          : new Date(sheet.dueDate).getTime()
+        : sheet.completedAt
+          ? new Date(sheet.completedAt).getTime()
+          : null;
+    if (closedStamp == null) return true;
+    if (closedStamp !== latestClosedAt.getTime()) return true;
+    return Number(sheet.dueHours) >= latestClosedHours;
   });
 
   return ok({
@@ -89,9 +104,20 @@ export async function GET(_: Request, context: RouteContext) {
     commissionedAt: equipment.commissionedAt?.toISOString() ?? null,
     isActive: equipment.isActive,
     usageUnit: equipment.usageUnit,
-    previousCheckCode: latestCompleted?.checkCode ?? null,
-    previousCheckDate: latestCompleted ? new Date(latestCompleted.completedAt ?? latestCompleted.dueDate).toISOString().slice(0, 10) : null,
-    previousCheckHours: latestCompleted ? Number(latestCompleted.completedHours ?? latestCompleted.dueHours) : null,
+    previousCheckCode: latestClosed?.checkCode ?? null,
+    previousCheckDate: latestClosed
+      ? new Date(latestClosed.completedAt ?? latestClosed.skippedAt ?? latestClosed.dueDate)
+          .toISOString()
+          .slice(0, 10)
+      : null,
+    previousCheckHours: latestClosed
+      ? Number(latestClosed.completedHours ?? latestClosed.dueHours)
+      : null,
+    planningEffectiveHoursOverride:
+      equipment.planningEffectiveHoursOverride != null
+        ? Number(equipment.planningEffectiveHoursOverride)
+        : null,
+    planningEffectiveHoursNote: equipment.planningEffectiveHoursNote ?? null,
     checkRules: equipment.checkRules.map((rule: any) => ({
       id: rule.id,
       code: rule.code,
@@ -108,12 +134,12 @@ export async function GET(_: Request, context: RouteContext) {
       const dueHours = Number(sheet.dueHours);
       const currentHours = Number(equipment.currentHours);
       const isIssued = sheet.issuedAt !== null && sheet.completedAt === null;
-      const isCompleted = sheet.status === "COMPLETED";
+      const isClosed = sheet.status === "COMPLETED" || sheet.status === "SKIPPED";
       const effectiveDueDate =
-        !isCompleted && !isIssued && currentHours >= dueHours && sheet.dueDate > now
+        !isClosed && !isIssued && currentHours >= dueHours && sheet.dueDate > now
           ? now
           : sheet.dueDate;
-      const effectiveStatus = isCompleted
+      const effectiveStatus = isClosed
         ? sheet.status
         : isIssued
           ? "ISSUED"
@@ -188,6 +214,15 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
   if (parsed.data.isActive !== undefined) updateData.isActive = parsed.data.isActive;
   if (parsed.data.usageUnit !== undefined) updateData.usageUnit = parsed.data.usageUnit;
+  if (parsed.data.planningEffectiveHoursOverride !== undefined) {
+    updateData.planningEffectiveHoursOverride =
+      parsed.data.planningEffectiveHoursOverride === null
+        ? null
+        : parsed.data.planningEffectiveHoursOverride;
+  }
+  if (parsed.data.planningEffectiveHoursNote !== undefined) {
+    updateData.planningEffectiveHoursNote = parsed.data.planningEffectiveHoursNote;
+  }
 
   const baselineTouched =
     parsed.data.previousCheckCode !== undefined ||
@@ -227,6 +262,13 @@ export async function PATCH(request: Request, context: RouteContext) {
     where: { id: equipmentId },
     data: updateData,
   });
+
+  const planningFeedbackTouched =
+    parsed.data.planningEffectiveHoursOverride !== undefined ||
+    parsed.data.planningEffectiveHoursNote !== undefined;
+  if (planningFeedbackTouched) {
+    syncEquipmentPlan(equipmentId, new Date().getFullYear()).catch(() => null);
+  }
 
   if (baselineTouched && updated.planningBaselineCheckCode && updated.planningBaselineCheckDate && updated.planningBaselineHours != null) {
     const match = await prisma.checkRule.findFirst({
