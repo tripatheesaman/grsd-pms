@@ -2,6 +2,7 @@ import { EntryStatus } from "@prisma/client";
 import { z } from "zod";
 import { parseBody, requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
+import { minimumReadingForDailyEntry } from "@/lib/entries/reading-floor";
 import { writeAuditLog } from "@/lib/audit/log";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
       select: {
         id: true,
         currentHours: true,
+        meterSegment: true,
       },
     }),
     prisma.dailyEntry.findMany({
@@ -71,6 +73,7 @@ export async function POST(request: Request) {
   const toCreate: Array<{
     equipmentId: string;
     entryDate: Date;
+    meterSegment: number;
     hoursRun: number;
     status: EntryStatus;
     createdById: string;
@@ -95,11 +98,16 @@ export async function POST(request: Request) {
       continue;
     }
 
-    const currentHours = Number(equipment.currentHours);
-    if (item.hoursRun < currentHours) {
+    const minReading = await minimumReadingForDailyEntry(prisma, {
+      equipmentId: item.equipmentId,
+      meterSegment: equipment.meterSegment,
+      beforeEntryDate: day,
+      equipmentCurrentHours: Number(equipment.currentHours),
+    });
+    if (item.hoursRun < minReading) {
       failures.push({
         equipmentId: item.equipmentId,
-        message: `Hours must be at least ${currentHours.toFixed(2)}`,
+        message: `Hours must be at least ${minReading.toFixed(2)}`,
       });
       continue;
     }
@@ -107,6 +115,7 @@ export async function POST(request: Request) {
     toCreate.push({
       equipmentId: item.equipmentId,
       entryDate: day,
+      meterSegment: equipment.meterSegment,
       hoursRun: item.hoursRun,
       status: EntryStatus.PENDING,
       createdById: access.user.id,

@@ -2,6 +2,7 @@ import { EntryStatus } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
+import { minimumReadingForDailyEntry } from "@/lib/entries/reading-floor";
 import { recalculateEquipmentUsage } from "@/lib/planning/recalculate-usage";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { prisma } from "@/lib/prisma";
@@ -28,6 +29,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       equipment: {
         select: {
           id: true,
+          currentHours: true,
         },
       },
     },
@@ -41,29 +43,17 @@ export async function PATCH(request: Request, context: RouteContext) {
     return fail("BAD_REQUEST", "Entry is not pending approval", 400);
   }
 
-  const previousEntry = await prisma.dailyEntry.findFirst({
-    where: {
-      equipmentId: entry.equipmentId,
-      status: EntryStatus.APPROVED,
-      entryDate: {
-        lt: entry.entryDate,
-      },
-    },
-    orderBy: {
-      entryDate: "desc",
-    },
-    select: {
-      entryDate: true,
-      hoursRun: true,
-    },
+  const minReading = await minimumReadingForDailyEntry(prisma, {
+    equipmentId: entry.equipmentId,
+    meterSegment: entry.meterSegment,
+    beforeEntryDate: entry.entryDate,
+    equipmentCurrentHours: Number(entry.equipment.currentHours),
   });
 
-  const previousHoursForValidation = previousEntry ? Number(previousEntry.hoursRun) : 0;
-
-  if (Number(entry.hoursRun) < previousHoursForValidation) {
+  if (Number(entry.hoursRun) < minReading) {
     return fail(
       "BAD_REQUEST",
-      `Hours must be at least ${previousHoursForValidation.toFixed(2)} (previous entry hours)`,
+      `Hours must be at least ${minReading.toFixed(2)} (previous entry hours)`,
       400,
     );
   }

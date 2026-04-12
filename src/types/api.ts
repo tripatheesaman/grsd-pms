@@ -34,6 +34,7 @@ export type EquipmentListItem = {
   equipmentClass: string;
   averageHoursPerDay: number;
   currentHours: number;
+  nextEntryMinimumReading: number;
   usageUnit: "HOURS" | "KM";
   activeRuleCount: number;
   hasActiveGrounding?: boolean;

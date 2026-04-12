@@ -67,6 +67,10 @@ export async function POST(request: Request, context: RouteContext) {
     where: {
       id: equipmentId,
     },
+    select: {
+      id: true,
+      meterSegment: true,
+    },
   });
   if (!equipment) {
     return fail("NOT_FOUND", "Equipment not found", 404);
@@ -91,6 +95,7 @@ export async function POST(request: Request, context: RouteContext) {
     data: {
       equipmentId,
       entryDate: day,
+      meterSegment: equipment.meterSegment,
       hoursRun: parsed.data.hoursRun,
       status: EntryStatus.PENDING,
       createdById: access.user.id,

@@ -3,6 +3,7 @@ import { requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { deriveDailyRatesFromCumulativeReadings } from "@/lib/planning/engine";
 import { buildForecastMetrics } from "@/lib/planning/forecast-metrics";
+import { segmentMaxesFromGroupBy, toLifetimeReadings } from "@/lib/planning/meter-segment";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
@@ -33,25 +34,41 @@ export async function GET(_: Request, context: RouteContext) {
     return fail("NOT_FOUND", "Equipment not found", 404);
   }
 
-  const allEntries = await prisma.dailyEntry.findMany({
-    where: {
-      equipmentId,
-      status: EntryStatus.APPROVED,
-    },
-    select: {
-      hoursRun: true,
-      entryDate: true,
-    },
-    orderBy: {
-      entryDate: "asc",
-    },
-  });
+  const [segmentGroups, allEntries] = await Promise.all([
+    prisma.dailyEntry.groupBy({
+      by: ["meterSegment"],
+      where: { equipmentId, status: EntryStatus.APPROVED },
+      _max: { hoursRun: true },
+    }),
+    prisma.dailyEntry.findMany({
+      where: {
+        equipmentId,
+        status: EntryStatus.APPROVED,
+      },
+      select: {
+        hoursRun: true,
+        entryDate: true,
+        meterSegment: true,
+      },
+      orderBy: {
+        entryDate: "asc",
+      },
+    }),
+  ]);
+
+  const fullSeg = segmentMaxesFromGroupBy(
+    segmentGroups.map((g) => ({ meterSegment: g.meterSegment, _max: g._max })),
+  );
 
   const dailySeries = deriveDailyRatesFromCumulativeReadings(
-    allEntries.map((entry) => ({
-      entryDate: entry.entryDate,
-      hoursRun: Number(entry.hoursRun),
-    })),
+    toLifetimeReadings(
+      allEntries.map((entry) => ({
+        entryDate: entry.entryDate,
+        hoursRun: Number(entry.hoursRun),
+        meterSegment: entry.meterSegment,
+      })),
+      fullSeg,
+    ),
   );
 
   const metrics = buildForecastMetrics(dailySeries, Number(equipment.averageHoursPerDay));

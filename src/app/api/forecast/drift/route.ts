@@ -3,6 +3,7 @@ import { ok } from "@/lib/api/response";
 import { EntryStatus } from "@prisma/client";
 import { deriveDailyRatesFromCumulativeReadings } from "@/lib/planning/engine";
 import { buildForecastMetrics } from "@/lib/planning/forecast-metrics";
+import { toLifetimeReadings } from "@/lib/planning/meter-segment";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
@@ -44,6 +45,7 @@ export async function GET() {
         select: {
           hoursRun: true,
           entryDate: true,
+          meterSegment: true,
         },
         orderBy: {
           entryDate: "asc",
@@ -52,13 +54,38 @@ export async function GET() {
     },
   });
 
+  const segmentGroupsAll =
+    equipments.length > 0
+      ? await prisma.dailyEntry.groupBy({
+          by: ["equipmentId", "meterSegment"],
+          where: {
+            equipmentId: { in: equipments.map((e) => e.id) },
+            status: EntryStatus.APPROVED,
+          },
+          _max: { hoursRun: true },
+        })
+      : [];
+
+  const segmentMaxByEquipment = new Map<string, Map<number, number>>();
+  for (const g of segmentGroupsAll) {
+    if (g._max.hoursRun == null) continue;
+    const inner = segmentMaxByEquipment.get(g.equipmentId) ?? new Map<number, number>();
+    inner.set(g.meterSegment, Number(g._max.hoursRun));
+    segmentMaxByEquipment.set(g.equipmentId, inner);
+  }
+
   const byClass = new Map<string, DriftAccumulator>();
   for (const equipment of equipments) {
+    const segMap = segmentMaxByEquipment.get(equipment.id) ?? new Map<number, number>();
     const series = deriveDailyRatesFromCumulativeReadings(
-      equipment.entries.map((entry) => ({
-        entryDate: entry.entryDate,
-        hoursRun: Number(entry.hoursRun),
-      })),
+      toLifetimeReadings(
+        equipment.entries.map((entry) => ({
+          entryDate: entry.entryDate,
+          hoursRun: Number(entry.hoursRun),
+          meterSegment: entry.meterSegment,
+        })),
+        segMap,
+      ),
     );
     if (series.length < 10) {
       continue;
