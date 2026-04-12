@@ -78,6 +78,11 @@ export async function GET(_: Request, context: RouteContext) {
   const latestClosedHours = latestClosed
     ? Number(latestClosed.completedHours ?? latestClosed.dueHours ?? 0)
     : null;
+  const hasStoredBaseline =
+    equipment.planningBaselineCheckCode != null &&
+    equipment.planningBaselineCheckDate != null &&
+    equipment.planningBaselineHours != null;
+
   const visibleSheets = (equipment.checkSheets ?? []).filter((sheet: any) => {
     if (sheet.status !== "COMPLETED" && sheet.status !== "SKIPPED") return true;
     if (!latestClosedAt || latestClosedHours == null) return true;
@@ -104,15 +109,22 @@ export async function GET(_: Request, context: RouteContext) {
     commissionedAt: equipment.commissionedAt?.toISOString() ?? null,
     isActive: equipment.isActive,
     usageUnit: equipment.usageUnit,
-    previousCheckCode: latestClosed?.checkCode ?? null,
-    previousCheckDate: latestClosed
-      ? new Date(latestClosed.completedAt ?? latestClosed.skippedAt ?? latestClosed.dueDate)
-          .toISOString()
-          .slice(0, 10)
-      : null,
-    previousCheckHours: latestClosed
-      ? Number(latestClosed.completedHours ?? latestClosed.dueHours)
-      : null,
+    meterSegment: equipment.meterSegment,
+    previousCheckCode: hasStoredBaseline
+      ? equipment.planningBaselineCheckCode
+      : latestClosed?.checkCode ?? null,
+    previousCheckDate: hasStoredBaseline
+      ? equipment.planningBaselineCheckDate!.toISOString().slice(0, 10)
+      : latestClosed
+        ? new Date(latestClosed.completedAt ?? latestClosed.skippedAt ?? latestClosed.dueDate)
+            .toISOString()
+            .slice(0, 10)
+        : null,
+    previousCheckHours: hasStoredBaseline
+      ? Number(equipment.planningBaselineHours)
+      : latestClosed
+        ? Number(latestClosed.completedHours ?? latestClosed.dueHours)
+        : null,
     planningEffectiveHoursOverride:
       equipment.planningEffectiveHoursOverride != null
         ? Number(equipment.planningEffectiveHoursOverride)
@@ -319,6 +331,10 @@ export async function PATCH(request: Request, context: RouteContext) {
         baselineDate: updated.planningBaselineCheckDate,
       }).catch(() => null);
     }
+  }
+
+  if (baselineTouched) {
+    await syncEquipmentPlan(equipmentId, new Date().getFullYear()).catch(() => null);
   }
 
   await writeAuditLog({

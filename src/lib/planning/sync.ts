@@ -7,6 +7,11 @@ import {
   deriveForecastAverageHoursPerDay,
   determineStatus,
 } from "@/lib/planning/engine";
+import {
+  lastReadingLifetime,
+  segmentMaxesFromGroupBy,
+  toLifetimeReadings,
+} from "@/lib/planning/meter-segment";
 import { getSystemThresholds } from "@/lib/planning/thresholds";
 
 function toAlertLevel(status: CheckStatus) {
@@ -50,6 +55,15 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     return null;
   }
 
+  const segmentGroups = await prisma.dailyEntry.groupBy({
+    by: ["meterSegment"],
+    where: { equipmentId, status: EntryStatus.APPROVED },
+    _max: { hoursRun: true },
+  });
+  const fullSegmentMaxes = segmentMaxesFromGroupBy(
+    segmentGroups.map((g) => ({ meterSegment: g.meterSegment, _max: g._max })),
+  );
+
   const allEntriesRaw = await prisma.dailyEntry.findMany({
     where: {
       equipmentId,
@@ -59,11 +73,18 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
       id: true,
       hoursRun: true,
       entryDate: true,
+      meterSegment: true,
     },
     orderBy: [{ entryDate: "desc" }, { id: "desc" }],
     take: 120,
   });
   const allEntries = [...allEntriesRaw].sort((a, b) => a.entryDate.getTime() - b.entryDate.getTime());
+
+  const allEntriesNumeric = allEntries.map((e) => ({
+    entryDate: e.entryDate,
+    hoursRun: Number(e.hoursRun),
+    meterSegment: e.meterSegment,
+  }));
 
   const lastEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1]! : null;
 
@@ -99,7 +120,8 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
   if (hasOverride) {
     startHours = Number(overrideRaw);
   } else if (lastEntry) {
-    startHours = Number(lastEntry.hoursRun);
+    const life = lastReadingLifetime(allEntriesNumeric, fullSegmentMaxes);
+    startHours = life ?? Number(lastEntry.hoursRun);
   } else if (baselineHours != null) {
     startHours = baselineHours;
   } else {
@@ -161,10 +183,7 @@ export async function syncEquipmentPlan(equipmentId: string, year: number) {
     null;
 
   const historicalDailyHours = deriveDailyRatesFromCumulativeReadings(
-    allEntries.map((entry) => ({
-      entryDate: entry.entryDate,
-      hoursRun: Number(entry.hoursRun),
-    })),
+    toLifetimeReadings(allEntriesNumeric, fullSegmentMaxes),
   );
   const forecastAverage = deriveForecastAverageHoursPerDay({
     latestAverage: Number(equipment.averageHoursPerDay),

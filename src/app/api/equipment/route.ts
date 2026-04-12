@@ -10,6 +10,8 @@ import {
   deriveDailyRatesFromCumulativeReadings,
   deriveForecastAverageHoursPerDay,
 } from "@/lib/planning/engine";
+import { toLifetimeReadings } from "@/lib/planning/meter-segment";
+import { minimumReadingFromContext } from "@/lib/entries/reading-floor";
 
 const ruleSchema = z.object({
   code: z
@@ -47,7 +49,7 @@ const createEquipmentSchema = z.object({
   previousCheckHours: z.number().nonnegative().optional(),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const access = await requireAccess({
     minRole: "USER",
     requiredPermission: permissionKeys.equipmentRead,
@@ -57,8 +59,17 @@ export async function GET() {
   }
 
   const now = new Date();
+  const url = new URL(request.url);
+  const forEntryDate = url.searchParams.get("forEntryDate");
+  let beforeEntryDate: Date;
+  if (forEntryDate && /^\d{4}-\d{2}-\d{2}$/.test(forEntryDate)) {
+    beforeEntryDate = new Date(`${forEntryDate}T00:00:00.000Z`);
+  } else {
+    beforeEntryDate = new Date(now);
+    beforeEntryDate.setUTCHours(0, 0, 0, 0);
+  }
 
-  const items = await (prisma as any).equipment.findMany({
+  const items = await prisma.equipment.findMany({
     orderBy: {
       equipmentNumber: "asc",
     },
@@ -69,6 +80,7 @@ export async function GET() {
       equipmentClass: true,
       averageHoursPerDay: true,
       currentHours: true,
+      meterSegment: true,
       usageUnit: true,
       planningBaselineCheckCode: true,
       planningBaselineCheckDate: true,
@@ -94,38 +106,75 @@ export async function GET() {
   });
 
   const equipmentIds = items.map((item: any) => item.id);
-  const recentApprovedEntries = equipmentIds.length > 0
-    ? await prisma.dailyEntry.findMany({
-        where: {
-          equipmentId: { in: equipmentIds },
-          status: "APPROVED",
-        },
-        select: {
-          equipmentId: true,
-          entryDate: true,
-          hoursRun: true,
-        },
-        orderBy: [
-          { equipmentId: "asc" },
-          { entryDate: "asc" },
-        ],
-      })
-    : [];
+  const recentApprovedEntries =
+    equipmentIds.length > 0
+      ? await prisma.dailyEntry.findMany({
+          where: {
+            equipmentId: { in: equipmentIds },
+            status: "APPROVED",
+          },
+          select: {
+            equipmentId: true,
+            entryDate: true,
+            hoursRun: true,
+            meterSegment: true,
+          },
+          orderBy: [{ equipmentId: "asc" }, { entryDate: "asc" }],
+        })
+      : [];
+  const segmentGroups =
+    equipmentIds.length > 0
+      ? await prisma.dailyEntry.groupBy({
+          by: ["equipmentId", "meterSegment"],
+          where: { equipmentId: { in: equipmentIds }, status: "APPROVED" },
+          _max: { hoursRun: true },
+        })
+      : [];
 
-  const entriesByEquipment = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
+  const segmentMaxByEquipment = new Map<string, Map<number, number>>();
+  for (const g of segmentGroups) {
+    if (g._max.hoursRun == null) continue;
+    const inner = segmentMaxByEquipment.get(g.equipmentId) ?? new Map<number, number>();
+    inner.set(g.meterSegment, Number(g._max.hoursRun));
+    segmentMaxByEquipment.set(g.equipmentId, inner);
+  }
+
+  const entriesByEquipment = new Map<
+    string,
+    Array<{ entryDate: Date; hoursRun: number; meterSegment: number }>
+  >();
   for (const entry of recentApprovedEntries) {
     const current = entriesByEquipment.get(entry.equipmentId) ?? [];
     current.push({
       entryDate: entry.entryDate,
       hoursRun: Number(entry.hoursRun),
+      meterSegment: entry.meterSegment,
     });
     entriesByEquipment.set(entry.equipmentId, current);
+  }
+
+  const equipmentHasApproved = new Set(recentApprovedEntries.map((e) => e.equipmentId));
+  const approvedByEquipmentSegment = new Map<
+    string,
+    Array<{ entryDate: Date; hoursRun: number }>
+  >();
+  for (const entry of recentApprovedEntries) {
+    const k = `${entry.equipmentId}:${entry.meterSegment}`;
+    const arr = approvedByEquipmentSegment.get(k) ?? [];
+    arr.push({ entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) });
+    approvedByEquipmentSegment.set(k, arr);
+  }
+
+  function lifetimeReadingsForEquipment(equipmentId: string) {
+    const raw = entriesByEquipment.get(equipmentId) ?? [];
+    const segMap = segmentMaxByEquipment.get(equipmentId) ?? new Map<number, number>();
+    return toLifetimeReadings(raw, segMap);
   }
 
   return ok(
     items.map((item: any) => ({
       ...(function () {
-        const readings = entriesByEquipment.get(item.id) ?? [];
+        const readings = lifetimeReadingsForEquipment(item.id);
         if (readings.length < 2) {
           return {
             averageHoursPerDay: Number(item.averageHoursPerDay),
@@ -147,7 +196,7 @@ export async function GET() {
       })(),
       ...(function () {
         const avgValue = (function () {
-          const readings = entriesByEquipment.get(item.id) ?? [];
+          const readings = lifetimeReadingsForEquipment(item.id);
           if (readings.length < 2) return Number(item.averageHoursPerDay);
           const dailyRates = deriveDailyRatesFromCumulativeReadings(readings);
           if (dailyRates.length === 0) return Number(item.averageHoursPerDay);
@@ -171,6 +220,14 @@ export async function GET() {
       displayName: item.displayName,
       equipmentClass: item.equipmentClass,
       currentHours: Number(item.currentHours),
+      nextEntryMinimumReading: minimumReadingFromContext(
+        (approvedByEquipmentSegment.get(`${item.id}:${item.meterSegment}`) ?? []).filter(
+          (r) => r.entryDate < beforeEntryDate,
+        ),
+        beforeEntryDate,
+        equipmentHasApproved.has(item.id),
+        Number(item.currentHours),
+      ),
       usageUnit: item.usageUnit,
       activeRuleCount: item.checkRules.length,
       hasActiveGrounding: (item.groundingPeriods ?? []).length > 0,

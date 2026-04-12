@@ -6,6 +6,7 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { recalculateEquipmentUsageBatch } from "@/lib/planning/recalculate-usage";
 import { getSystemThresholds } from "@/lib/planning/thresholds";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
+import { minimumReadingFromContext } from "@/lib/entries/reading-floor";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
 
@@ -63,6 +64,7 @@ export async function POST(request: Request) {
     select: {
       id: true,
       equipmentId: true,
+      meterSegment: true,
       entryDate: true,
       hoursRun: true,
     },
@@ -85,47 +87,65 @@ export async function POST(request: Request) {
    * would then create a second APPROVED with the same (E, T) and violate the unique key.
    * We delete conflicting APPROVED rows first so the pending submission becomes the approved record.
    */
-  const allApprovedBeforeLatestPending = await prisma.dailyEntry.findMany({
-    where: {
-      equipmentId: { in: equipmentIds },
-      status: EntryStatus.APPROVED,
-      entryDate: { lt: maxEntryDate },
-    },
-    select: {
-      equipmentId: true,
-      entryDate: true,
-      hoursRun: true,
-    },
-    orderBy: [{ equipmentId: "asc" }, { entryDate: "asc" }],
-  });
+  const [allApprovedBeforeLatestPending, approvedCounts, equipmentHoursRows] = await Promise.all([
+    prisma.dailyEntry.findMany({
+      where: {
+        equipmentId: { in: equipmentIds },
+        status: EntryStatus.APPROVED,
+        entryDate: { lt: maxEntryDate },
+      },
+      select: {
+        equipmentId: true,
+        meterSegment: true,
+        entryDate: true,
+        hoursRun: true,
+      },
+      orderBy: [{ equipmentId: "asc" }, { meterSegment: "asc" }, { entryDate: "asc" }],
+    }),
+    prisma.dailyEntry.groupBy({
+      by: ["equipmentId"],
+      where: {
+        equipmentId: { in: equipmentIds },
+        status: EntryStatus.APPROVED,
+      },
+      _count: true,
+    }),
+    prisma.equipment.findMany({
+      where: { id: { in: equipmentIds } },
+      select: { id: true, currentHours: true },
+    }),
+  ]);
 
-  /** Approved rows for this equipment, sorted by entryDate ascending (for "previous" lookup). */
-  const approvedByEquipment = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
+  const approvedByKey = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
   for (const row of allApprovedBeforeLatestPending) {
-    const list = approvedByEquipment.get(row.equipmentId) ?? [];
+    const k = `${row.equipmentId}:${row.meterSegment}`;
+    const list = approvedByKey.get(k) ?? [];
     list.push({ entryDate: row.entryDate, hoursRun: Number(row.hoursRun) });
-    approvedByEquipment.set(row.equipmentId, list);
+    approvedByKey.set(k, list);
   }
 
-  /** Latest APPROVED strictly before this pending row's `entryDate` (same rule as single-entry approve). */
-  function previousApprovedHoursFor(equipmentId: string, before: Date): number {
-    const list = approvedByEquipment.get(equipmentId) ?? [];
-    let prevHours = 0;
-    for (const a of list) {
-      if (a.entryDate.getTime() >= before.getTime()) break;
-      prevHours = a.hoursRun;
-    }
-    return prevHours;
-  }
+  const hasAnyApprovedMap = new Map(
+    approvedCounts.map((c) => [c.equipmentId, c._count > 0]),
+  );
+  const currentHoursByEquipment = new Map(
+    equipmentHoursRows.map((e) => [e.id, Number(e.currentHours)]),
+  );
 
   const validEntries = pendingEntries.filter((entry) => {
-    const previousHours = previousApprovedHoursFor(entry.equipmentId, entry.entryDate);
+    const k = `${entry.equipmentId}:${entry.meterSegment}`;
+    const segmentRows = approvedByKey.get(k) ?? [];
+    const minReading = minimumReadingFromContext(
+      segmentRows,
+      entry.entryDate,
+      hasAnyApprovedMap.get(entry.equipmentId) ?? false,
+      currentHoursByEquipment.get(entry.equipmentId) ?? 0,
+    );
 
     const hoursRun = Number(entry.hoursRun);
     if (!Number.isFinite(hoursRun) || hoursRun <= 0 || hoursRun > MAX_HOURS_RUN) {
       return false;
     }
-    return hoursRun >= previousHours;
+    return hoursRun >= minReading;
   });
 
   const invalidCount = pendingEntries.length - validEntries.length;

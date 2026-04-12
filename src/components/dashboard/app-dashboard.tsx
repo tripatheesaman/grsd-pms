@@ -43,6 +43,7 @@ import {
   useUpdateSystemConfig,
   useUsers,
   useEquipmentDetail,
+  useResetEquipmentMeter,
   useUpdateEquipment,
   useDeleteEquipment,
   useCheckRules,
@@ -612,7 +613,8 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const techniciansSectionActive = activeSection === "technician-management";
   const historySectionActive = activeSection === "equipment-history";
   const analytics = useAnalytics(analyticsSectionActive);
-  const equipments = useEquipments(true);
+  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
+  const equipments = useEquipments(true, entryDate);
   const alerts = useAlerts(analyticsSectionActive);
   const acknowledgeAlert = useAcknowledgeAlert();
   const checksheets = useCheckSheets(checksSectionActive);
@@ -668,7 +670,6 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   }, [systemConfig.data]);
 
   const [selectedEquipmentId, setSelectedEquipmentId] = useState<string | null>(null);
-  const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
   const [entryHours, setEntryHours] = useState("0");
   const [year, setYear] = useState(new Date().getFullYear());
   const [calendarView, setCalendarView] = useState<"monthly" | "weekly" | "daily" | "yearly">("monthly");
@@ -707,14 +708,16 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
       if (parsed.entryDate) setEntryDate(parsed.entryDate);
       setBulkEntries(parsed.entries);
       void (async () => {
-        await queryClient.refetchQueries({ queryKey: ["equipment", "list"] });
-        const list = queryClient.getQueryData<EquipmentListItem[]>(["equipment", "list"]) ?? [];
+        const effectiveDate = parsed.entryDate ?? new Date().toISOString().slice(0, 10);
+        await queryClient.refetchQueries({ queryKey: ["equipment", "list", effectiveDate] });
+        const list =
+          queryClient.getQueryData<EquipmentListItem[]>(["equipment", "list", effectiveDate]) ?? [];
         const byId = new Map(list.map((e) => [e.id, e]));
         setBulkEntries((prev) =>
           prev.map((row) => {
             const eq = byId.get(row.equipmentId);
             if (!eq) return row;
-            const previous = Number(eq.currentHours ?? 0);
+            const previous = eq.nextEntryMinimumReading;
             const hoursNum = Number(row.hours);
             const hours =
               row.hours === "" || Number.isNaN(hoursNum) || hoursNum < previous
@@ -948,6 +951,12 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
   const createGrounding = useCreateGrounding();
   const endGrounding = useEndGrounding();
   const updateEquipment = useUpdateEquipment();
+  const resetEquipmentMeter = useResetEquipmentMeter();
+  const [meterResetConfirm, setMeterResetConfirm] = useState<{
+    id: string;
+    number: string;
+    usageUnit: "HOURS" | "KM";
+  } | null>(null);
   const deleteEquipment = useDeleteEquipment();
   const equipmentCheckRules = useCheckRules(selectedEquipmentForMgmt);
   const createCheckRule = useCreateCheckRule();
@@ -1347,17 +1356,37 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     [equipmentOptions, equipmentNumberCollator],
   );
 
+  useEffect(() => {
+    if (!bulkMode || !equipments.data?.length) return;
+    const byId = new Map(equipments.data.map((e) => [e.id, e]));
+    setBulkEntries((prev) => {
+      if (prev.length === 0) return prev;
+      return prev.map((row) => {
+        const eq = byId.get(row.equipmentId);
+        if (!eq) return row;
+        const previous = eq.nextEntryMinimumReading;
+        const hoursNum = Number(row.hours);
+        const hours =
+          row.hours === "" || Number.isNaN(hoursNum) || hoursNum < previous
+            ? previous.toFixed(2)
+            : row.hours;
+        return { ...row, previous, hours, error: undefined };
+      });
+    });
+  }, [bulkMode, equipments.data]);
+
   const refetchBulkPreviousFromEquipment = useCallback(async () => {
     setBulkBaselineRefreshPending(true);
     try {
-      await queryClient.refetchQueries({ queryKey: ["equipment", "list"] });
-      const list = queryClient.getQueryData<EquipmentListItem[]>(["equipment", "list"]) ?? [];
+      await queryClient.refetchQueries({ queryKey: ["equipment", "list", entryDate] });
+      const list =
+        queryClient.getQueryData<EquipmentListItem[]>(["equipment", "list", entryDate]) ?? [];
       const byId = new Map(list.map((e) => [e.id, e]));
       setBulkEntries((prev) =>
         prev.map((row) => {
           const eq = byId.get(row.equipmentId);
           if (!eq) return row;
-          const previous = Number(eq.currentHours ?? 0);
+          const previous = eq.nextEntryMinimumReading;
           const hoursNum = Number(row.hours);
           const hours =
             row.hours === "" || Number.isNaN(hoursNum) || hoursNum < previous
@@ -1372,7 +1401,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     } finally {
       setBulkBaselineRefreshPending(false);
     }
-  }, [queryClient]);
+  }, [queryClient, entryDate]);
 
   const stats = analytics.data;
   const allChecks = useMemo(() => checksheets.data ?? [], [checksheets.data]);
@@ -1639,8 +1668,10 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     if (!entryHours || enteredHours <= 0) {
       setHoursError("Hours must be greater than 0");
       hasError = true;
-    } else if (selectedEquipment && enteredHours < selectedEquipment.currentHours) {
-      setHoursError(`Hours must be at least ${selectedEquipment.currentHours.toFixed(2)} (current equipment hours)`);
+    } else if (selectedEquipment && enteredHours < selectedEquipment.nextEntryMinimumReading) {
+      setHoursError(
+        `Hours must be at least ${selectedEquipment.nextEntryMinimumReading.toFixed(2)} (minimum for this date)`,
+      );
       hasError = true;
     } else {
       setHoursError(undefined);
@@ -1766,8 +1797,14 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
     setEquipmentSearchIndex(-1);
     setEquipmentError(undefined);
     const selectedEquipment = equipmentOptions.find((e) => e.id === equipmentId);
-    if (selectedEquipment && Number(entryHours) > 0 && Number(entryHours) < selectedEquipment.currentHours) {
-      setHoursError(`Hours must be at least ${selectedEquipment.currentHours.toFixed(2)} (current equipment hours)`);
+    if (
+      selectedEquipment &&
+      Number(entryHours) > 0 &&
+      Number(entryHours) < selectedEquipment.nextEntryMinimumReading
+    ) {
+      setHoursError(
+        `Hours must be at least ${selectedEquipment.nextEntryMinimumReading.toFixed(2)} (minimum for this date)`,
+      );
     } else {
       setHoursError(undefined);
     }
@@ -2627,7 +2664,7 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                       setBulkMode(true);
                       setBulkEntries(
                         bulkEquipmentList.map((eq) => {
-                          const previous = Number(eq.currentHours ?? 0);
+                          const previous = eq.nextEntryMinimumReading;
                           return {
                             equipmentId: eq.id,
                             hours: previous.toFixed(2),
@@ -2731,23 +2768,42 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                           id="hours-run-input"
                           type="number"
                           required
-                          min={selectedEquipmentId ? equipmentOptions.find((e) => e.id === selectedEquipmentId)?.currentHours || 0.1 : 0.1}
+                          min={
+                            selectedEquipmentId
+                              ? equipmentOptions.find((e) => e.id === selectedEquipmentId)
+                                  ?.nextEntryMinimumReading || 0.1
+                              : 0.1
+                          }
                           step={0.1}
                           value={entryHours}
                           onChange={(e) => {
                             setEntryHours(e.target.value);
                             const hours = Number(e.target.value);
-                            const selectedEquipment = selectedEquipmentId ? equipmentOptions.find((eq) => eq.id === selectedEquipmentId) : null;
-                            if (selectedEquipment && hours > 0 && hours < selectedEquipment.currentHours) {
+                            const selectedEquipment = selectedEquipmentId
+                              ? equipmentOptions.find((eq) => eq.id === selectedEquipmentId)
+                              : null;
+                            if (
+                              selectedEquipment &&
+                              hours > 0 &&
+                              hours < selectedEquipment.nextEntryMinimumReading
+                            ) {
                               const label = selectedEquipment.usageUnit === "KM" ? "Kilometers" : "Hours";
-                              setHoursError(`${label} must be at least ${selectedEquipment.currentHours.toFixed(2)} (current equipment value)`);
+                              setHoursError(
+                                `${label} must be at least ${selectedEquipment.nextEntryMinimumReading.toFixed(2)} (minimum for this date)`,
+                              );
                             } else {
                               setHoursError(undefined);
                             }
                           }}
                           onKeyDown={handleHoursKeyDown}
                           className={`h-12 w-full rounded-xl border-2 ${hoursError ? "border-red-400" : "border-[var(--color-surface-strong)]"} bg-white px-4 text-sm font-medium text-[var(--color-text)] outline-none transition-all focus:border-[var(--color-primary)] focus:ring-4 focus:ring-[var(--color-primary)]/20 shadow-sm`}
-                          placeholder={selectedEquipmentId ? (equipmentOptions.find((e) => e.id === selectedEquipmentId) ? `Min: ${equipmentOptions.find((e) => e.id === selectedEquipmentId)!.currentHours.toFixed(1)}` : "0.0") : "0.0"}
+                          placeholder={
+                            selectedEquipmentId
+                              ? equipmentOptions.find((e) => e.id === selectedEquipmentId)
+                                ? `Min: ${equipmentOptions.find((e) => e.id === selectedEquipmentId)!.nextEntryMinimumReading.toFixed(1)}`
+                                : "0.0"
+                              : "0.0"
+                          }
                         />
                         {hoursError && (
                           <p className="mt-1 text-xs font-medium text-red-600">{hoursError}</p>
@@ -5040,6 +5096,19 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                                       className="rounded-lg border-2 border-[var(--color-primary)] bg-white px-3 py-1.5 text-xs font-bold text-[var(--color-primary)] transition-all hover:bg-[var(--color-primary)] hover:text-white"
                                     >
                                       Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setMeterResetConfirm({
+                                          id: eq.id,
+                                          number: eq.equipmentNumber,
+                                          usageUnit: eq.usageUnit,
+                                        })
+                                      }
+                                      className="rounded-lg border-2 border-amber-600 bg-white px-3 py-1.5 text-xs font-bold text-amber-800 transition-all hover:bg-amber-600 hover:text-white"
+                                    >
+                                      Reset meter
                                     </button>
                                     {eq.hasActiveGrounding ? (
                                       <button
@@ -7698,6 +7767,48 @@ export function AppDashboard({ user }: { user: DashboardUser }) {
                   <button
                     type="button"
                     onClick={() => setDeleteConfirmModal(null)}
+                    className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {meterResetConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={() => setMeterResetConfirm(null)}>
+              <div className="relative w-full max-w-md rounded-2xl bg-gradient-to-br from-white to-[var(--color-surface)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-lg font-bold text-[var(--color-text)] mb-3">Reset meter</h3>
+                <p className="text-sm font-medium text-[var(--color-text-soft)] mb-4">
+                  After reset, new daily entries for {meterResetConfirm.number} use readings from zero again. Totals on the equipment still include all prior approved readings.
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetEquipmentMeter.mutate(meterResetConfirm.id, {
+                        onSuccess: () => {
+                          toast.success(
+                            meterResetConfirm.usageUnit === "KM"
+                              ? "Kilometer reading reset for new entries"
+                              : "Hour meter reset for new entries",
+                          );
+                          setMeterResetConfirm(null);
+                        },
+                        onError: (error) => {
+                          toast.error(error instanceof Error ? error.message : "Failed to reset meter");
+                        },
+                      });
+                    }}
+                    disabled={resetEquipmentMeter.isPending}
+                    className="flex-1 rounded-lg bg-gradient-to-r from-amber-600 to-amber-700 px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:scale-[1.02] hover:shadow-xl disabled:opacity-60"
+                  >
+                    {resetEquipmentMeter.isPending ? "Resetting…" : "Confirm reset"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMeterResetConfirm(null)}
                     className="flex-1 rounded-lg border-2 border-[var(--color-surface-strong)] bg-white px-4 py-2 text-sm font-bold text-[var(--color-text)] transition-all hover:bg-[var(--color-surface-strong)]"
                   >
                     Cancel

@@ -3,33 +3,35 @@ import {
   deriveDailyRatesFromCumulativeReadings,
   deriveForecastAverageHoursPerDay,
 } from "@/lib/planning/engine";
+import {
+  segmentMaxesFromGroupBy,
+  toLifetimeReadings,
+  totalLifetimeFromSegmentMaxes,
+} from "@/lib/planning/meter-segment";
 import { prisma } from "@/lib/prisma";
 
-/**
- * Recomputes usage for many equipment in a small number of queries (vs N× per-id recalculations).
- * Uses MySQL 8 window functions for “last 120 approved entries per equipment”.
- */
 export async function recalculateEquipmentUsageBatch(equipmentIds: string[]) {
   const ids = [...new Set(equipmentIds)].filter(Boolean);
   if (ids.length === 0) return;
 
-  const [equipmentRows, maxByEquipment, recentRows] = await Promise.all([
+  const [equipmentRows, segmentGroups, recentRows] = await Promise.all([
     prisma.equipment.findMany({
       where: { id: { in: ids } },
       select: { id: true, averageHoursPerDay: true, currentHours: true },
     }),
     prisma.dailyEntry.groupBy({
-      by: ["equipmentId"],
+      by: ["equipmentId", "meterSegment"],
       where: { equipmentId: { in: ids }, status: EntryStatus.APPROVED },
       _max: { hoursRun: true },
     }),
-    prisma.$queryRaw<Array<{ equipmentId: string; entryDate: Date; hoursRun: unknown }>>`
-      SELECT equipmentId, entryDate, hoursRun
+    prisma.$queryRaw<Array<{ equipmentId: string; entryDate: Date; hoursRun: unknown; meterSegment: number }>>`
+      SELECT equipmentId, entryDate, hoursRun, meterSegment
       FROM (
         SELECT
           equipmentId,
           entryDate,
           hoursRun,
+          meterSegment,
           ROW_NUMBER() OVER (PARTITION BY equipmentId ORDER BY entryDate DESC) AS rn
         FROM dailyentry
         WHERE equipmentId IN (${Prisma.join(ids)}) AND status = 'APPROVED'
@@ -38,17 +40,25 @@ export async function recalculateEquipmentUsageBatch(equipmentIds: string[]) {
     `,
   ]);
 
-  const maxMap = new Map<string, number>();
-  for (const g of maxByEquipment) {
-    if (g._max.hoursRun != null) {
-      maxMap.set(g.equipmentId, Number(g._max.hoursRun));
-    }
+  const segmentMaxByEquipment = new Map<string, Map<number, number>>();
+  for (const g of segmentGroups) {
+    if (g._max.hoursRun == null) continue;
+    const inner = segmentMaxByEquipment.get(g.equipmentId) ?? new Map<number, number>();
+    inner.set(g.meterSegment, Number(g._max.hoursRun));
+    segmentMaxByEquipment.set(g.equipmentId, inner);
   }
 
-  const entriesByEquipment = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
+  const entriesByEquipment = new Map<
+    string,
+    Array<{ entryDate: Date; hoursRun: number; meterSegment: number }>
+  >();
   for (const row of recentRows) {
     const list = entriesByEquipment.get(row.equipmentId) ?? [];
-    list.push({ entryDate: row.entryDate, hoursRun: Number(row.hoursRun) });
+    list.push({
+      entryDate: row.entryDate,
+      hoursRun: Number(row.hoursRun),
+      meterSegment: row.meterSegment,
+    });
     entriesByEquipment.set(row.equipmentId, list);
   }
   for (const list of entriesByEquipment.values()) {
@@ -57,10 +67,18 @@ export async function recalculateEquipmentUsageBatch(equipmentIds: string[]) {
 
   const updatePromises: Array<Promise<unknown>> = [];
   for (const eq of equipmentRows) {
+    const segMap = segmentMaxByEquipment.get(eq.id);
+    const hasApproved = segMap != null && segMap.size > 0;
+    const currentHours = hasApproved
+      ? totalLifetimeFromSegmentMaxes(segMap!)
+      : Number(eq.currentHours);
+
     const list = entriesByEquipment.get(eq.id) ?? [];
-    const dailyRates = deriveDailyRatesFromCumulativeReadings(
-      list.map((e) => ({ entryDate: e.entryDate, hoursRun: e.hoursRun })),
-    );
+    const fullSeg = segMap ?? new Map<number, number>();
+    const dailyRates =
+      list.length > 0
+        ? deriveDailyRatesFromCumulativeReadings(toLifetimeReadings(list, fullSeg))
+        : [];
 
     let averageHoursPerDay = Number(eq.averageHoursPerDay);
     if (dailyRates.length > 0) {
@@ -69,12 +87,6 @@ export async function recalculateEquipmentUsageBatch(equipmentIds: string[]) {
         historicalDailyHours: dailyRates,
       });
     }
-
-    const maxApprovedHours = maxMap.has(eq.id) ? maxMap.get(eq.id)! : null;
-    // When any approved entries exist, cumulative meter comes from data (max hoursRun).
-    // Do not Math.max with stored equipment.currentHours — that blocks corrections when a max entry is edited down.
-    const currentHours =
-      maxApprovedHours != null ? maxApprovedHours : Number(eq.currentHours);
 
     updatePromises.push(
       prisma.equipment.update({
@@ -101,6 +113,17 @@ export async function recalculateEquipmentUsage(equipmentId: string) {
   });
   if (!equipment) return null;
 
+  const segmentGroups = await prisma.dailyEntry.groupBy({
+    by: ["meterSegment"],
+    where: { equipmentId, status: EntryStatus.APPROVED },
+    _max: { hoursRun: true },
+  });
+  const fullSeg = segmentMaxesFromGroupBy(
+    segmentGroups.map((g) => ({ meterSegment: g.meterSegment, _max: g._max })),
+  );
+  const hasApproved = fullSeg.size > 0;
+  const totalLife = hasApproved ? totalLifetimeFromSegmentMaxes(fullSeg) : null;
+
   const approvedEntriesRaw = await prisma.dailyEntry.findMany({
     where: {
       equipmentId,
@@ -109,6 +132,7 @@ export async function recalculateEquipmentUsage(equipmentId: string) {
     select: {
       hoursRun: true,
       entryDate: true,
+      meterSegment: true,
     },
     orderBy: {
       entryDate: "desc",
@@ -120,34 +144,26 @@ export async function recalculateEquipmentUsage(equipmentId: string) {
   );
 
   const dailyRates = deriveDailyRatesFromCumulativeReadings(
-    approvedEntries.map((entry) => ({
-      entryDate: entry.entryDate,
-      hoursRun: Number(entry.hoursRun),
-    })),
+    toLifetimeReadings(
+      approvedEntries.map((e) => ({
+        entryDate: e.entryDate,
+        hoursRun: Number(e.hoursRun),
+        meterSegment: e.meterSegment,
+      })),
+      fullSeg,
+    ),
   );
 
   let averageHoursPerDay = Number(equipment.averageHoursPerDay);
   if (dailyRates.length > 0) {
     averageHoursPerDay = deriveForecastAverageHoursPerDay({
-      // Use an entry-derived baseline so repeated recalculations stay deterministic.
       latestAverage: 0,
       historicalDailyHours: dailyRates,
     });
   }
 
-  const maxApproved = await prisma.dailyEntry.aggregate({
-    where: {
-      equipmentId,
-      status: EntryStatus.APPROVED,
-    },
-    _max: {
-      hoursRun: true,
-    },
-  });
-  const maxApprovedHours =
-    maxApproved._max.hoursRun != null ? Number(maxApproved._max.hoursRun) : null;
   const currentHours =
-    maxApprovedHours != null ? maxApprovedHours : Number(equipment.currentHours);
+    totalLife != null ? totalLife : Number(equipment.currentHours);
 
   const updated = await prisma.equipment.update({
     where: { id: equipmentId },

@@ -111,10 +111,16 @@ export function useAnalytics(enabled = true) {
   });
 }
 
-export function useEquipments(enabled = true) {
+export function useEquipments(enabled = true, forEntryDate?: string) {
+  const dateKey = forEntryDate ?? "";
   return useQuery({
-    queryKey: ["equipment", "list"],
-    queryFn: () => apiGet<EquipmentListItem[]>("/api/equipment"),
+    queryKey: ["equipment", "list", dateKey],
+    queryFn: () =>
+      apiGet<EquipmentListItem[]>(
+        dateKey
+          ? `/api/equipment?forEntryDate=${encodeURIComponent(dateKey)}`
+          : "/api/equipment",
+      ),
     enabled,
   });
 }
@@ -687,6 +693,7 @@ export type EquipmentDetail = {
   commissionedAt: string | null;
   isActive: boolean;
   usageUnit: "HOURS" | "KM";
+  meterSegment: number;
   previousCheckCode: string | null;
   previousCheckDate: string | null;
   previousCheckHours: number | null;
@@ -830,6 +837,20 @@ export function useEquipmentHistory(
         `/api/equipment/${equipmentId}/history${qs ? `?${qs}` : ""}`,
       ),
     enabled: enabled && Boolean(equipmentId),
+  });
+}
+
+export function useResetEquipmentMeter() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (equipmentId: string) =>
+      apiPost<{ meterSegment: number }>(`/api/equipment/${equipmentId}/meter-reset`, {}),
+    onSuccess: (_data, equipmentId) => {
+      queryClient.invalidateQueries({ queryKey: ["equipment"] });
+      queryClient.invalidateQueries({ queryKey: ["equipment", "detail", equipmentId] });
+      queryClient.invalidateQueries({ queryKey: ["entries"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard", "analytics"] });
+    },
   });
 }
 

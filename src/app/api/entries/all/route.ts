@@ -1,35 +1,12 @@
 import { EntryStatus, Prisma } from "@prisma/client";
 import { requireAccess } from "@/lib/api/guard";
 import { ok } from "@/lib/api/response";
+import {
+  findPreviousApprovedReading,
+  minimumReadingFromContext,
+} from "@/lib/entries/reading-floor";
 import { prisma } from "@/lib/prisma";
 import { permissionKeys } from "@/lib/security/permissions";
-
-type ApprovedEntryRow = {
-  entryDate: Date;
-  hoursRun: number;
-};
-
-function findPreviousApprovedEntry(
-  approvedRows: ApprovedEntryRow[],
-  currentEntryDate: Date,
-): ApprovedEntryRow | null {
-  let left = 0;
-  let right = approvedRows.length - 1;
-  let resultIndex = -1;
-
-  while (left <= right) {
-    const mid = Math.floor((left + right) / 2);
-    const midMs = approvedRows[mid]!.entryDate.getTime();
-    if (midMs < currentEntryDate.getTime()) {
-      resultIndex = mid;
-      left = mid + 1;
-    } else {
-      right = mid - 1;
-    }
-  }
-
-  return resultIndex >= 0 ? approvedRows[resultIndex]! : null;
-}
 
 export async function GET(request: Request) {
   const access = await requireAccess({
@@ -139,11 +116,13 @@ export async function GET(request: Request) {
       },
       select: {
         equipmentId: true,
+        meterSegment: true,
         entryDate: true,
         hoursRun: true,
       },
       orderBy: [
         { equipmentId: "asc" },
+        { meterSegment: "asc" },
         { entryDate: "asc" },
       ],
     }),
@@ -157,29 +136,28 @@ export async function GET(request: Request) {
     }),
   ]);
 
-  const approvedByEquipment = new Map<string, ApprovedEntryRow[]>();
+  const approvedByKey = new Map<string, Array<{ entryDate: Date; hoursRun: number }>>();
   for (const entry of allApprovedEntries) {
-    const rows = approvedByEquipment.get(entry.equipmentId) ?? [];
+    const k = `${entry.equipmentId}:${entry.meterSegment}`;
+    const rows = approvedByKey.get(k) ?? [];
     rows.push({ entryDate: entry.entryDate, hoursRun: Number(entry.hoursRun) });
-    approvedByEquipment.set(entry.equipmentId, rows);
+    approvedByKey.set(k, rows);
   }
 
   const approvedCountMap = new Map(
-    approvedCounts.map((c) => [c.equipmentId, c._count > 0])
+    approvedCounts.map((c) => [c.equipmentId, c._count > 0]),
   );
 
   const entriesWithPrevious = entries.map((entry) => {
-    const previousEntry = findPreviousApprovedEntry(
-      approvedByEquipment.get(entry.equipmentId) ?? [],
+    const k = `${entry.equipmentId}:${entry.meterSegment}`;
+    const segmentRows = approvedByKey.get(k) ?? [];
+    const previousEntry = findPreviousApprovedReading(segmentRows, entry.entryDate);
+    const previousHours = minimumReadingFromContext(
+      segmentRows,
       entry.entryDate,
+      approvedCountMap.get(entry.equipmentId) ?? false,
+      Number(entry.equipment.currentHours),
     );
-
-    const hasAnyApprovedEntries = approvedCountMap.get(entry.equipmentId) ?? false;
-    const previousHours = previousEntry
-      ? Number(previousEntry.hoursRun)
-      : hasAnyApprovedEntries
-        ? 0
-        : Number(entry.equipment.currentHours);
 
     return {
       id: entry.id,

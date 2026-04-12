@@ -3,6 +3,7 @@ import { EntryStatus } from "@prisma/client";
 import { parseBody, requireAccess } from "@/lib/api/guard";
 import { fail, ok } from "@/lib/api/response";
 import { writeAuditLog } from "@/lib/audit/log";
+import { minimumReadingForDailyEntry } from "@/lib/entries/reading-floor";
 import { syncEquipmentPlan } from "@/lib/planning/sync";
 import { recalculateEquipmentUsage } from "@/lib/planning/recalculate-usage";
 import { prisma } from "@/lib/prisma";
@@ -59,34 +60,16 @@ export async function PATCH(request: Request, context: RouteContext) {
 
   if (parsed.data.hoursRun !== undefined) {
     const effectiveDate = updateData.entryDate || entry.entryDate;
-    const previousEntry = await prisma.dailyEntry.findFirst({
-      where: {
-        equipmentId: entry.equipmentId,
-        status: EntryStatus.APPROVED,
-        entryDate: {
-          lt: effectiveDate,
-        },
-      },
-      orderBy: {
-        entryDate: "desc",
-      },
+    const minReading = await minimumReadingForDailyEntry(prisma, {
+      equipmentId: entry.equipmentId,
+      meterSegment: entry.meterSegment,
+      beforeEntryDate: effectiveDate,
+      equipmentCurrentHours: Number(entry.equipment.currentHours),
+      excludeEntryId: entry.status === EntryStatus.APPROVED ? entry.id : undefined,
     });
 
-    const hasAnyApprovedEntries = await prisma.dailyEntry.count({
-      where: {
-        equipmentId: entry.equipmentId,
-        status: EntryStatus.APPROVED,
-      },
-    }) > 0;
-
-    const previousHours = previousEntry
-      ? Number(previousEntry.hoursRun)
-      : hasAnyApprovedEntries
-        ? 0
-        : Number(entry.equipment.currentHours);
-
-    if (parsed.data.hoursRun < previousHours) {
-      return fail("BAD_REQUEST", `Hours must be at least ${previousHours.toFixed(2)} (previous entry hours)`, 400);
+    if (parsed.data.hoursRun < minReading) {
+      return fail("BAD_REQUEST", `Hours must be at least ${minReading.toFixed(2)} (previous entry hours)`, 400);
     }
 
     updateData.hoursRun = parsed.data.hoursRun;
